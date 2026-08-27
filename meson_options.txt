@@ -1,0 +1,1 @@
+option('minibox_dir', type: 'string', value: '', description: 'miniBox checkout (guest kit + host)')

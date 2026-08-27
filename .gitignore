@@ -4,3 +4,6 @@ build/
 # Commercial discs never enter this repository; the gate's own images live in
 # tests/roms and are free to distribute.
 tests/roms-local/
+
+# the sandbox writes this when a guest faults
+minibox-diag.log

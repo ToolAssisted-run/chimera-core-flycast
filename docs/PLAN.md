@@ -88,11 +88,16 @@ Chimera's firmware channel once the machine runs.
 
 ## Milestones
 
-- **M1 - the machine runs headless.** Curated source list (a `sources.sh` in
-  the PPSSPP style), meson for guest and native reference, `cinterface.cpp`
-  against the Chimera guest ABI, `norend`, HLE BIOS, no video. Proof: the SH4
-  executes a known program to a fixed frame count identically native and
-  waterboxed.
+- **M1 DONE** (2026-08-27): the machine runs headless, in the sandbox, and is
+  identical to the native reference. `waterbox/run-gate.sh`: 7/7 - equivalence
+  over 60 and 300 frames, proof the SH4 actually executed (a half-length run
+  must differ), lossless per-frame savestate round-trips, and two native runs
+  agreeing with each other.
+  - 115 curated sources + 60 vendored, from `waterbox/sources.sh`.
+  - It runs THIS repository's own program: `tests/make-testprog.py` hand-
+    assembles eight SH4 instructions into an ELF, which the HLE bios boots at
+    0x8C010000 with no bios, no disc and no SH4 toolchain. In 300 frames the
+    machine executes about 564 million instructions.
 - **M2 - input, memory domains, savestates.** The gate grows the legs every
   other core has: input visibly shapes the machine, per-frame savestate
   round-trips are lossless, memory domains are exposed.
@@ -106,8 +111,45 @@ Chimera's firmware channel once the machine runs.
 - **M6 - beyond Dreamcast.** NAOMI and Atomiswave as additional machines in one
   package, the way gpgx serves four systems.
 
+## Sharp edges hit
+
+- **A second thread stepping the same SH4.** `config::ThreadedRendering`
+  decides, despite its name, whether `Emulator::start()` launches an emulation
+  THREAD - and settings assigned before `init()`/`loadGame()` are overwritten
+  by both. The symptom was an instruction trace that interleaved two executions
+  of the same three-instruction loop, with registers from the wrong one. The
+  settings are now pinned immediately before `start()`.
+- **A Dreamcast is big.** 16MB of RAM, 16MB of VRAM, 8MB for the AICA, 32MB for
+  the Elan: about 72MB of machine before Flycast allocates anything of its own,
+  and with no virtual memory those are ordinary allocations in the guest heap.
+  Sized like an 8-bit core, an allocation failed quietly and the machine wrote
+  through a null base; the sandbox caught it ("OUTSIDE every registered block")
+  rather than letting it corrupt anything.
+- **No virtual memory.** Upstream reserves 512MB with shm and mmap so the host
+  MMU can do SH4 translation. `waterbox/stubs/vmem-stub.cpp` refuses, and
+  Flycast's supported fallback (software translation, plain allocations) is
+  what the sandbox runs.
+- **`access()` is not a syscall here.** The guest has mounted files and no
+  kernel, so the call stopped the machine outright. It is answered in terms of
+  what the sandbox has: a file that opens is readable, one that does not is
+  absent, and nothing is writable.
+- **Thread-local storage.** stb_image keeps its error string in `thread_local`,
+  and the sandbox refuses any core with TLS. `STBI_NO_THREAD_LOCALS` and one
+  three-line shim for the flag setter it drops.
+- **The test program needed to mask interrupts.** The HLE bios boots an ELF
+  with interrupts enabled and no handlers installed, so the first vblank
+  vectored through VBR into empty RAM and died on an illegal instruction.
+  Real homebrew installs handlers; this program refuses the interrupts.
+- **zlib's CMake renames a tracked header.** Running Flycast's own CMake in the
+  same checkout moves `zconf.h` to `zconf.h.included`, and every later build
+  fails to find it. Restore it with git if a stray configure has been run.
+
 ## Log
 
 - **2026-08-27** Feasibility settled (this document). Repo created, upstream
   pinned at `c3763d8`. Headless CMake configure proven; the headless BUILD gets
   as far as the two findings above, which is the M1 starting line.
+- **2026-08-27** M1 done: a Dreamcast runs inside the sandbox, byte-identical
+  to the native reference, savestates included. No patch was needed for the
+  renderer after all - upstream's own `NO_REND` selects the renderer that draws
+  nothing - so the patch set is one file: the log listener that opens a socket.

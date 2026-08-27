@@ -1,0 +1,33 @@
+diff --git a/core/log/LogManager.cpp b/core/log/LogManager.cpp
+index 0d5086b..2fb020a 100644
+--- a/core/log/LogManager.cpp
++++ b/core/log/LogManager.cpp
+@@ -15,7 +15,12 @@
+ 
+ #include "ConsoleListener.h"
+ #include "InMemoryListener.h"
++/* chimera: a sandboxed core has no sockets, and a log listener that opens one
++ * pulls asio into a build that otherwise needs no networking at all. Defining
++ * NO_NETWORK_LOGGER leaves every other listener untouched. */
++#ifndef NO_NETWORK_LOGGER
+ #include "NetworkListener.h"
++#endif
+ #include "Log.h"
+ #include "StringUtil.h"
+ #include "cfg/cfg.h"
+@@ -171,6 +176,7 @@ void LogManager::UpdateConfig()
+ 		}
+ 		EnableListener(LogListener::FILE_LISTENER, logToFile);
+ 	}
++#ifndef NO_NETWORK_LOGGER
+ 	std::string newLogServer = config::loadStr("log", "LogServer");
+ 	if (logServer != newLogServer)
+ 	{
+@@ -178,6 +184,7 @@ void LogManager::UpdateConfig()
+ 		RegisterListener(LogListener::NETWORK_LISTENER, new NetworkListener(logServer));
+ 		EnableListener(LogListener::NETWORK_LISTENER, !logServer.empty());
+ 	}
++#endif
+ }
+ 
+ void LogManager::Log(LogTypes::LOG_LEVELS level, LogTypes::LOG_TYPE type, const char* file,
