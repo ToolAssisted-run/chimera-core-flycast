@@ -9,5 +9,16 @@ build/
 tests/roms-local/
 tests/firmware-local/
 
+# ...and a belt to go with those braces. tests/roms IS tracked, because the
+# programs the gate builds live there - so a disc image dropped beside them is
+# one `git add -A` away from being committed, which is exactly what happened
+# once. No disc format is ever tracked here; the homebrew is .elf and .bin.
+tests/roms/*.chd
+tests/roms/*.gdi
+tests/roms/*.cdi
+tests/roms/*.cue
+tests/roms/*.iso
+tests/roms/*.zip
+
 # the sandbox writes this when a guest faults
 minibox-diag.log

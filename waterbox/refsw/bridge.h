@@ -44,9 +44,34 @@ void refsw_triangle(int mode, const RefswParams *params, uint32_t tag,
                     const void *v1, const void *v2, const void *v3,
                     int left, int top);
 
-/* Resolve what was rasterised: CORE keeps a tag per pixel and shades once per
- * list, which is what makes its blending order the hardware's. */
-void refsw_resolve(int mode, int tileX, int tileY);
+/* One list of a tile, drawn the way CORE draws it.
+ *
+ * A list is not "rasterise, then shade". CORE keeps a TAG per pixel and shades
+ * once per pass, and for two of the three lists it does that REPEATEDLY:
+ *
+ *   opaque       one pass: whatever wins the depth test is what shows.
+ *   punchthrough alpha-tested, so a pixel that fails the test leaves a hole
+ *                and the layer behind it must be drawn - the list is replayed
+ *                until no holes are left.
+ *   translucent  depth PEELING: each pass takes the nearest layer not yet
+ *                taken and blends it, and the list is replayed until every
+ *                layer has been.
+ *
+ * That is why a pass takes a CALLBACK rather than a list of triangles: the
+ * caller has to be able to submit the same triangles again, as many times as
+ * the peeling needs. Calling RenderParamTags once, without the peel loops, is
+ * what the first version of this file did - and it drew opaque geometry
+ * correctly while dropping every punch-through and translucent polygon in
+ * every game, which is a failure a test triangle cannot show.
+ */
+typedef void (*refsw_submit_fn)(void *user);
+
+void refsw_pass(int mode, int left, int top, refsw_submit_fn submit, void *user);
+
+/* Diagnostics for CHIMERA_REFSW_TRACE: triangles rasterised into this tile so
+ * far, and how many of its pixels are lit. */
+unsigned refsw_tile_triangles(void);
+unsigned refsw_tile_lit(void);
 
 /* The finished tile: 32x32 pixels, BGRA. */
 const uint32_t *refsw_tile_colors(void);

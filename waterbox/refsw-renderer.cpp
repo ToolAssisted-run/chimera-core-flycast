@@ -37,6 +37,7 @@
 #include "refsw/bridge.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstddef>
 
 /* refsw reads video memory directly for its textures. */
@@ -59,6 +60,30 @@ static int g_frameHeight = 480;
 
 /* One tile's worth of state, reused: refsw keeps its buffers in globals, the
  * way the hardware keeps them in the chip. */
+/* per-frame, for the trace: how many triangles each list rasterised and how
+ * much of the last tile each left lit */
+static unsigned g_passTriangles[3];
+static unsigned g_passLit[3];
+
+/* A triangle's screen-space bounding box against a 32x32 tile. Conservative on
+ * purpose: a triangle that only grazes the tile is kept, because the cost of
+ * keeping one is a rasteriser call that writes nothing, and the cost of
+ * dropping one wrongly is a hole in the picture. */
+static inline bool TouchesTile(const Vertex& a, const Vertex& b, const Vertex& c, int left, int top)
+{
+	const float minX = std::min(a.x, std::min(b.x, c.x));
+	if (minX >= (float)(left + 32))
+		return false;
+	const float maxX = std::max(a.x, std::max(b.x, c.x));
+	if (maxX < (float)left)
+		return false;
+	const float minY = std::min(a.y, std::min(b.y, c.y));
+	if (minY >= (float)(top + 32))
+		return false;
+	const float maxY = std::max(a.y, std::max(b.y, c.y));
+	return maxY >= (float)top;
+}
+
 static void RenderTile(int tileX, int tileY, const rend_context& rc)
 {
 	const int left = tileX * 32;
@@ -76,18 +101,28 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 		{ REFSW_TRANSLUCENT, 2 },
 	};
 
-	for (const auto& pass : passes)
+	/* Each list is submitted through a callback, because CORE replays a list
+	 * once per layer it has to peel (see bridge.h). What follows is therefore
+	 * "how to submit this list", called as many times as the pass needs. */
+	struct Submission
 	{
-		const std::vector<PolyParam>& polys = pass.which == 0 ? rc.global_param_op
-			: pass.which == 1 ? rc.global_param_pt
-			: rc.global_param_tr;
+		const rend_context *rc;
+		const std::vector<PolyParam> *polys;
+		int mode;
+		int which;
+		int left;
+		int top;
+	};
 
+	auto submit = [](void *user) {
+		const Submission& sub = *(const Submission *)user;
+		const rend_context& rc = *sub.rc;
 		const Vertex *verts = rc.verts.data();
 		const u32 *indices = rc.idx.data();
 
-		for (size_t i = 0; i < polys.size(); i++)
+		for (size_t i = 0; i < sub.polys->size(); i++)
 		{
-			const PolyParam& pp = polys[i];
+			const PolyParam& pp = (*sub.polys)[i];
 			if (pp.count < 3)
 				continue;
 
@@ -96,10 +131,10 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 			 * address ISP_BACKGND_T names, and fills verts[0..3] with a quad
 			 * covering the screen. Every renderer special-cases it because
 			 * `first` indexes the VERTICES rather than the index buffer. It is
-			 * what a game's empty space is - the colour behind everything -
-			 * so a renderer that skips it draws its scenes onto whatever the
-			 * last frame left behind. */
-			if (pass.which == 0 && i == 0)
+			 * what a game's empty space is - the colour behind everything - so
+			 * a renderer that skips it draws its scenes onto whatever the last
+			 * frame left behind. */
+			if (sub.which == 0 && i == 0)
 			{
 				RefswParams bg;
 				bg.isp = pp.isp.full;
@@ -108,8 +143,8 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 				bg.tsp[1] = pp.tsp1.full;
 				bg.tcw[1] = pp.tcw1.full;
 				const Vertex *q = rc.verts.data();
-				refsw_triangle(pass.mode, &bg, 1, &q[0], &q[1], &q[2], left, top);
-				refsw_triangle(pass.mode, &bg, 2, &q[1], &q[2], &q[3], left, top);
+				refsw_triangle(sub.mode, &bg, 1, &q[0], &q[1], &q[2], sub.left, sub.top);
+				refsw_triangle(sub.mode, &bg, 2, &q[1], &q[2], &q[3], sub.left, sub.top);
 				continue;
 			}
 
@@ -122,21 +157,64 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 
 			/* Flycast hands over indexed triangle STRIPS; refsw rasterises one
 			 * triangle at a time, so the strip is walked here with the winding
-			 * alternating as a strip's does. */
+			 * alternating as a strip's does.
+			 *
+			 * One polygon's range can hold SEVERAL strips, separated by a
+			 * primitive restart - the index (u32)-1, which is what the GPU
+			 * renderers hand to GL_PRIMITIVE_RESTART_FIXED_INDEX and what
+			 * upstream's own sorter skips (core/rend/sorter.cpp). A walker that
+			 * does not know that reads verts[0xFFFFFFFF] and dies: Re-Volt got
+			 * about eight hundred frames in before it did. The winding counts
+			 * from the START OF THE CURRENT STRIP rather than from the start of
+			 * the polygon, because that is what a restart restarts. */
+			static const u32 RESTART = ~0u;
 			const u32 *idx = indices + pp.first;
+			u32 stripStart = 0;
 			for (u32 t = 0; t + 2 < pp.count; t++)
 			{
+				if (idx[t] == RESTART) { stripStart = t + 1; continue; }
+				if (idx[t + 1] == RESTART) { t += 1; stripStart = t + 1; continue; }
+				if (idx[t + 2] == RESTART) { t += 2; stripStart = t + 1; continue; }
+
 				const Vertex& a = verts[idx[t]];
 				const Vertex& b = verts[idx[t + 1]];
 				const Vertex& c = verts[idx[t + 2]];
-				if (t & 1)
-					refsw_triangle(pass.mode, &params, (uint32_t)i + 1, &b, &a, &c, left, top);
+
+				/* Does this triangle touch this tile at all?
+				 *
+				 * The hardware bins polygons into per-tile object lists as the
+				 * TA receives them, and a tile only ever sees what was binned
+				 * into it. Flycast hands over the lists unbinned, so without
+				 * this test every polygon is rasterised into every one of the
+				 * three hundred tiles: Re-Volt's opening scene submitted five
+				 * thousand polygons and this walker turned them into two and a
+				 * half MILLION triangle setups a frame. The bounding box is
+				 * what the binning would have decided, arrived at from the
+				 * other end. */
+				if (!TouchesTile(a, b, c, sub.left, sub.top))
+					continue;
+				if ((t - stripStart) & 1)
+					refsw_triangle(sub.mode, &params, (uint32_t)i + 1, &b, &a, &c, sub.left, sub.top);
 				else
-					refsw_triangle(pass.mode, &params, (uint32_t)i + 1, &a, &b, &c, left, top);
+					refsw_triangle(sub.mode, &params, (uint32_t)i + 1, &a, &b, &c, sub.left, sub.top);
 			}
 		}
+	};
 
-		refsw_resolve(pass.mode, left, top);
+	for (const auto& pass : passes)
+	{
+		const std::vector<PolyParam>& polys = pass.which == 0 ? rc.global_param_op
+			: pass.which == 1 ? rc.global_param_pt
+			: rc.global_param_tr;
+
+		if (polys.empty())
+			continue;
+
+		Submission sub{ &rc, &polys, pass.mode, pass.which, left, top };
+		const unsigned before = refsw_tile_triangles();
+		refsw_pass(pass.mode, left, top, submit, &sub);
+		g_passTriangles[pass.which] += refsw_tile_triangles() - before;
+		g_passLit[pass.which] = refsw_tile_lit();
 	}
 
 	/* Out of the tile buffer and into the picture. The hardware would write the
@@ -177,17 +255,47 @@ struct refswrend : Renderer
 
 	bool Render() override
 	{
+		/* Set CHIMERA_REFSW_TRACE to watch what arrives: how many polygons of
+		 * each list, how many vertices, and how much of the picture came out
+		 * non-black. It is the difference between "the game draws nothing" and
+		 * "this renderer drops what the game draws", which a black screen alone
+		 * cannot tell you. */
+		static const bool trace = getenv("CHIMERA_REFSW_TRACE") != nullptr;
+		static int traceFrame = 0;
+
 		if (rendContext == nullptr || rendContext->isRTT)
+		{
+			if (trace)
+				fprintf(stderr, "refsw %d: %s\n", traceFrame++,
+					rendContext == nullptr ? "no context" : "render to texture, skipped");
 			return false;
+		}
 
 		g_frameWidth = (int)std::min<u32>(640, rendContext->framebufferWidth ? rendContext->framebufferWidth : 640);
 		g_frameHeight = (int)std::min<u32>(480, rendContext->framebufferHeight ? rendContext->framebufferHeight : 480);
+
+		g_passTriangles[0] = g_passTriangles[1] = g_passTriangles[2] = 0;
 
 		const int tilesX = (g_frameWidth + 31) / 32;
 		const int tilesY = (g_frameHeight + 31) / 32;
 		for (int ty = 0; ty < tilesY; ty++)
 			for (int tx = 0; tx < tilesX; tx++)
 				RenderTile(tx, ty, *rendContext);
+
+		if (trace)
+		{
+			size_t lit = 0;
+			for (int i = 0; i < g_frameWidth * g_frameHeight; i++)
+				if (g_frame[i] & 0x00FFFFFF)
+					lit++;
+			fprintf(stderr, "refsw %d: %dx%d op=%zu pt=%zu tr=%zu mvo=%zu verts=%zu idx=%zu lit=%zu"
+				" tris(op=%u pt=%u tr=%u)\n",
+				traceFrame++, g_frameWidth, g_frameHeight,
+				rendContext->global_param_op.size(), rendContext->global_param_pt.size(),
+				rendContext->global_param_tr.size(), rendContext->global_param_mvo.size(),
+				rendContext->verts.size(), rendContext->idx.size(), lit,
+				g_passTriangles[0], g_passTriangles[1], g_passTriangles[2]);
+		}
 
 		return true;
 	}

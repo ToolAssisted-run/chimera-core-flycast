@@ -1,10 +1,16 @@
 /* refsw's side of the seam. Includes refsw's headers and nothing of Flycast's.
  * See bridge.h for why the two never meet.
  */
+/* refsw's own translation units are compiled with refsw-host.h force-included
+ * (see meson.build), which is what gives the PVR registers their bitfield
+ * types. This file is compiled with the driver instead, so it says which
+ * registers it needs and reads them the same way. */
 #include "refsw_tile.h"
 #include "refsw_lists.h"
+#include "refsw-host.h"
 #include "bridge.h"
 
+#include <cfloat>
 #include <cstddef>
 #include <vector>
 
@@ -37,6 +43,9 @@ struct Registered {
 };
 static std::vector<Registered> g_registered;
 
+/* Diagnostics for CHIMERA_REFSW_TRACE: how many triangles this tile has taken. */
+static unsigned g_triangles;
+
 extern "C" bool chimera_fpu_entry(u32 tag, taRECT *rect, void *out)
 {
 	const u32 index = tag & ~TAG_INVALID;
@@ -62,6 +71,7 @@ void refsw_begin_tile(int left, int top, uint32_t bgTag, float bgDepth)
 	ClearBuffers(TAG_INVALID, bgDepth, 0);
 	ClearFpuEntries();
 	g_registered.clear();
+	g_triangles = 0;
 }
 
 void refsw_triangle(int mode, const RefswParams *params, uint32_t tag,
@@ -82,13 +92,72 @@ void refsw_triangle(int mode, const RefswParams *params, uint32_t tag,
 	g_registered.push_back(reg);
 	const u32 ourTag = (u32)g_registered.size();   /* 1-based; 0 means "none" */
 
+	g_triangles++;
 	RasterizeTriangle((RenderMode)mode, &reg.params, ourTag,
 		reg.v[0], reg.v[1], reg.v[2], nullptr, &rect);
 }
 
-void refsw_resolve(int mode, int tileX, int tileY)
+/* A peel loop that cannot run forever. The hardware stops when no pixel asks
+ * for another layer; a sandboxed core also has to stop when something has gone
+ * wrong, because a frontend cannot tell a hung guest from a slow one. Thirty
+ * two layers is far past what a Dreamcast scene has and far short of a hang.
+ */
+static const int MAX_PEELS = 32;
+
+void refsw_pass(int mode, int left, int top, refsw_submit_fn submit, void *user)
 {
-	RenderParamTags((RenderMode)mode, tileX, tileY);
+	switch ((RenderMode)mode)
+	{
+		case RM_OPAQUE:
+			submit(user);
+			RenderParamTags(RM_OPAQUE, left, top);
+			break;
+
+		case RM_PUNCHTHROUGH:
+			PeelBuffersPTInitial(FLT_MAX);
+			for (int peel = 0; peel < MAX_PEELS; peel++)
+			{
+				ClearMoreToDraw();
+				submit(user);
+				PeelBuffersPT();
+				RenderParamTags(RM_PUNCHTHROUGH, left, top);
+				PeelBuffersPTAfterHoles();
+				if (!GetMoreToDraw())
+					break;
+			}
+			break;
+
+		case RM_TRANSLUCENT:
+			ClearParamBuffer(TAG_INVALID);
+			for (int peel = 0; peel < MAX_PEELS; peel++)
+			{
+				ClearMoreToDraw();
+				if (!ISP_FEED_CFG.pre_sort)
+					PeelBuffers(FLT_MAX, 0);
+				submit(user);
+				RenderParamTags(RM_TRANSLUCENT, left, top);
+				if (!GetMoreToDraw())
+					break;
+			}
+			break;
+
+		default:
+			break;
+	}
+}
+
+/* Diagnostics: how many triangles this tile has rasterised, and how much of it
+ * is lit. Both are for CHIMERA_REFSW_TRACE, which is how a "nothing is drawn"
+ * report turns into a question with an answer. */
+unsigned refsw_tile_triangles(void) { return g_triangles; }
+
+unsigned refsw_tile_lit(void)
+{
+	unsigned lit = 0;
+	for (int i = 0; i < 32 * 32; i++)
+		if (colorBuffer1[i] & 0x00FFFFFF)
+			lit++;
+	return lit;
 }
 
 const uint32_t *refsw_tile_colors(void)
