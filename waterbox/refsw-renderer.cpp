@@ -64,6 +64,34 @@ static int g_frameHeight = 480;
  * much of the last tile each left lit */
 static unsigned g_passTriangles[3];
 static unsigned g_passLit[3];
+static bool g_trace;
+static unsigned g_texturedPolys;
+
+/* The ISP word refsw expects, which is not quite the one Flycast hands over.
+ *
+ * Four of the ISP/TSP instruction word's bits - 16-bit UV, Gouraud, Offset and
+ * TEXTURE - are described in the hardware docs, and in Flycast's own header,
+ * as "in TA they are replaced by the ones on PCW". A game submitting geometry
+ * through the TA sets them in the parameter control word; the ISP word it
+ * wrote alongside may say anything. refsw reads its parameters from video
+ * memory, where the TA has already done that substitution, so it expects them
+ * merged - and this renderer hands it the raw ISP word instead.
+ *
+ * The result was a game rendered entirely untextured and flat: every polygon
+ * of Re-Volt's world drawn in a single colour, because every one of them
+ * claimed to have no texture and no Gouraud shading. Flycast does the same
+ * copy for the background plane (ta_vtx.cpp), which is why THAT one looked
+ * right.
+ */
+static inline u32 IspForRefsw(const PolyParam& pp)
+{
+	ISP_TSP isp = pp.isp;
+	isp.UV_16b = pp.pcw.UV_16bit;
+	isp.Gouraud = pp.pcw.Gouraud;
+	isp.Offset = pp.pcw.Offset;
+	isp.Texture = pp.pcw.Texture;
+	return isp.full;
+}
 
 /* A triangle's screen-space bounding box against a 32x32 tile. Conservative on
  * purpose: a triangle that only grazes the tile is kept, because the cost of
@@ -137,7 +165,7 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 			if (sub.which == 0 && i == 0)
 			{
 				RefswParams bg;
-				bg.isp = pp.isp.full;
+				bg.isp = IspForRefsw(pp);
 				bg.tsp[0] = pp.tsp.full;
 				bg.tcw[0] = pp.tcw.full;
 				bg.tsp[1] = pp.tsp1.full;
@@ -148,8 +176,11 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 				continue;
 			}
 
+			if (g_trace && pp.pcw.Texture)
+				g_texturedPolys++;
+
 			RefswParams params;
-			params.isp = pp.isp.full;
+			params.isp = IspForRefsw(pp);
 			params.tsp[0] = pp.tsp.full;
 			params.tcw[0] = pp.tcw.full;
 			params.tsp[1] = pp.tsp1.full;
@@ -261,6 +292,7 @@ struct refswrend : Renderer
 		 * "this renderer drops what the game draws", which a black screen alone
 		 * cannot tell you. */
 		static const bool trace = getenv("CHIMERA_REFSW_TRACE") != nullptr;
+		g_trace = trace;
 		static int traceFrame = 0;
 
 		if (rendContext == nullptr || rendContext->isRTT)
@@ -275,6 +307,7 @@ struct refswrend : Renderer
 		g_frameHeight = (int)std::min<u32>(480, rendContext->framebufferHeight ? rendContext->framebufferHeight : 480);
 
 		g_passTriangles[0] = g_passTriangles[1] = g_passTriangles[2] = 0;
+		g_texturedPolys = 0;
 
 		const int tilesX = (g_frameWidth + 31) / 32;
 		const int tilesY = (g_frameHeight + 31) / 32;
@@ -289,12 +322,13 @@ struct refswrend : Renderer
 				if (g_frame[i] & 0x00FFFFFF)
 					lit++;
 			fprintf(stderr, "refsw %d: %dx%d op=%zu pt=%zu tr=%zu mvo=%zu verts=%zu idx=%zu lit=%zu"
-				" tris(op=%u pt=%u tr=%u)\n",
+				" tris(op=%u pt=%u tr=%u) textured=%u\n",
 				traceFrame++, g_frameWidth, g_frameHeight,
 				rendContext->global_param_op.size(), rendContext->global_param_pt.size(),
 				rendContext->global_param_tr.size(), rendContext->global_param_mvo.size(),
 				rendContext->verts.size(), rendContext->idx.size(), lit,
-				g_passTriangles[0], g_passTriangles[1], g_passTriangles[2]);
+				g_passTriangles[0], g_passTriangles[1], g_passTriangles[2],
+				g_texturedPolys / 300);
 		}
 
 		return true;
