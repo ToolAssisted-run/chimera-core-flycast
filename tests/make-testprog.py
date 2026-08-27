@@ -197,6 +197,13 @@ DRAW_ASM = PROLOGUE + """
         mov.l   #0x80000000,r2
         mov.l   r2,@r1
 
+        ; Everything the PVR reads for itself - the region array, the object
+        ; pointer blocks, the background parameters - is addressed in the
+        ; 32-BIT address space, which is the 0xA5xxxxxx window from the SH4 and
+        ; which the emulator maps into video memory the same way on both sides
+        ; (pvr_read32p goes through pvr_map32). Writing them through the linear
+        ; 0xA4 window puts them where the PVR does not look.
+        ;
         ; The region array, at its own address - one entry, marked last. Its
         ; opaque pointer must be the object-list base the TA was given, because
         ; that address is how Flycast finds the display list this render is
@@ -212,6 +219,17 @@ DRAW_ASM = PROLOGUE + """
         mov.l   r2,@(12,r1)
         mov.l   r2,@(16,r1)
 
+        ; The first word of the object pointer block, which is what actually
+        ; identifies this render: the PVR follows the region array's pointer to
+        ; the OPB and reads the parameter address from it. Real hardware's TA
+        ; writes that word while it builds the lists; Flycast's TA is high level
+        ; and builds no lists in memory at all, so nothing writes it - and a
+        ; render whose lists cannot be identified is a render that never
+        ; happens. The program writes it, because on hardware it would be there.
+        mov.l   #0xA5100000,r1
+        mov.l   #0x00100000,r2
+        mov.l   r2,@r1
+
         ; the display list itself
         mov.l   #0xE0000000,r3
 """ + _sq_block([0x80000000, 0xE0000000, 0x20800000, 0, 0, 0, 0, 0]) + """
@@ -219,6 +237,63 @@ DRAW_ASM = PROLOGUE + """
 """ + _sq_block([0xE0000000, F500, F100, FHALF, 0, 0, RED, 0]) + """
 """ + _sq_block([0xF0000000, F300, F400, FHALF, 0, 0, RED, 0]) + """
 """ + _sq_block([0, 0, 0, 0, 0, 0, 0, 0]) + """
+
+        ; THE BACKGROUND PLANE, which is not part of the display list: the PVR
+        ; reads its parameters from wherever ISP_BACKGND_T points and draws it
+        ; behind everything. Here that is a parameter block at PARAM_BASE+0x1000
+        ; (VRAM 0xA5201000) holding ISP/TSP/TCW and
+        ; three vertices of 16 bytes
+        ; each - x, y, 1/w and a packed colour, which is what skip=1 means.
+        ; Blue, at a depth further than the triangle's, so the picture is a red
+        ; triangle on blue rather than a red triangle on whatever was there.
+        mov.l   #0xA5201000,r1
+        mov.l   #0xE0000000,r2      ; ISP: depth always
+        mov.l   r2,@r1
+        mov.l   #0x20800000,r2      ; TSP
+        mov.l   r2,@(4,r1)
+        mov     #0,r2               ; TCW: no texture
+        mov.l   r2,@(8,r1)
+
+        mov.l   #0x00000000,r2      ; v0: x=0
+        mov.l   r2,@(12,r1)
+        mov.l   #0x00000000,r2      ; v0: y=0
+        mov.l   r2,@(16,r1)
+        mov.l   #0x3A83126F,r2      ; v0: 1/w = 0.001, behind everything
+        mov.l   r2,@(20,r1)
+        mov.l   #0xFF0000FF,r2      ; v0: blue
+        mov.l   r2,@(24,r1)
+
+        mov.l   #0x44200000,r2      ; v1: x=640
+        mov.l   r2,@(28,r1)
+        mov.l   #0x00000000,r2      ; v1: y=0
+        mov.l   r2,@(32,r1)
+        mov.l   #0x3A83126F,r2
+        mov.l   r2,@(36,r1)
+        mov.l   #0xFF0000FF,r2
+        mov.l   r2,@(40,r1)
+
+        mov.l   #0x00000000,r2      ; v2: x=0
+        mov.l   r2,@(44,r1)
+        mov.l   #0x43F00000,r2      ; v2: y=480
+        mov.l   r2,@(48,r1)
+        mov.l   #0x3A83126F,r2
+        mov.l   r2,@(52,r1)
+        mov.l   #0xFF0000FF,r2
+        mov.l   r2,@(56,r1)
+
+        mov.l   #0xA05F8088,r1      ; ISP_BACKGND_D: the depth it clears to
+        mov.l   #0x3A83126F,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F808C,r1      ; ISP_BACKGND_T: tag_address 0x400, skip 1
+        mov.l   #0x01002000,r2
+        mov.l   r2,@r1
+
+        ; The video output. Without this the machine draws 240 lines, which is
+        ; not a bug: FB_R_CTRL's vclk_div picks the video clock, and 0 is the
+        ; 240-line one. A game that wants 480 says so, and so does this.
+        mov.l   #0xA05F8044,r1      ; FB_R_CTRL: enable | 565 | vclk_div
+        mov.l   #0x00800005,r2
+        mov.l   r2,@r1
 
         ; where to render from and to, then go
         mov.l   #0xA05F8020,r1      ; PARAM_BASE

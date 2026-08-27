@@ -91,6 +91,28 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 			if (pp.count < 3)
 				continue;
 
+			/* The BACKGROUND PLANE is entry 0 of the opaque list, and it is not
+			 * a strip: Flycast reserves it, reads its parameters from the
+			 * address ISP_BACKGND_T names, and fills verts[0..3] with a quad
+			 * covering the screen. Every renderer special-cases it because
+			 * `first` indexes the VERTICES rather than the index buffer. It is
+			 * what a game's empty space is - the colour behind everything -
+			 * so a renderer that skips it draws its scenes onto whatever the
+			 * last frame left behind. */
+			if (pass.which == 0 && i == 0)
+			{
+				RefswParams bg;
+				bg.isp = pp.isp.full;
+				bg.tsp[0] = pp.tsp.full;
+				bg.tcw[0] = pp.tcw.full;
+				bg.tsp[1] = pp.tsp1.full;
+				bg.tcw[1] = pp.tcw1.full;
+				const Vertex *q = rc.verts.data();
+				refsw_triangle(pass.mode, &bg, 1, &q[0], &q[1], &q[2], left, top);
+				refsw_triangle(pass.mode, &bg, 2, &q[1], &q[2], &q[3], left, top);
+				continue;
+			}
+
 			RefswParams params;
 			params.isp = pp.isp.full;
 			params.tsp[0] = pp.tsp.full;

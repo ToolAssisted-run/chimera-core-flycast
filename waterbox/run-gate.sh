@@ -166,16 +166,25 @@ def span(y):
     return (min(xs), max(xs)) if xs else None
 top, lower = span(100), span(200)
 red = sum(1 for i in range(0, w * h * 4, 4) if px[i:i + 3].hex() == "ff0000")
-# a triangle with its base at y=100 and its apex below: wide at the top,
-# narrower lower down, and neither empty nor the whole screen
-ok = (top == (100, 499) and lower is not None
+blue = sum(1 for i in range(0, w * h * 4, 4) if px[i:i + 3].hex() == "0000ff")
+# A red triangle on a blue background, at 640x480. Every number here is one the
+# program asked for, so a renderer that draws the wrong thing is caught rather
+# than congratulated:
+#   the base spans x=100..499 at y=100 and narrows below it (the triangle);
+#   its area is 400*300/2 (exactly - the rasteriser fills what it should);
+#   everything else is the BACKGROUND PLANE, which is drawn from parameters in
+#     video memory rather than from the display list;
+#   and the picture is 480 lines, which needs FB_R_CTRL's video clock set.
+ok = ((w, h) == (640, 480)
+      and top == (100, 499) and lower is not None
       and (lower[1] - lower[0]) < (top[1] - top[0])
-      and 20000 < red < w * h // 2)
-print("ok" if ok else f"bad top={top} lower={lower} red={red}")
+      and red == 60000
+      and blue == w * h - red)
+print("ok" if ok else f"bad size=({w},{h}) top={top} lower={lower} red={red} blue={blue}")
 PYSHAPE
 )"
 	if [ "$shape" = "ok" ]; then
-		report "render:shape" PASS "a red triangle, 100..499 at its base, narrowing below"
+		report "render:shape" PASS "640x480: a red triangle of exactly 60000 pixels on a blue background plane"
 	else
 		report "render:shape" FAIL "$shape"
 	fi

@@ -133,7 +133,10 @@ Chimera's firmware channel once the machine runs.
     is that seam, with the layouts static_asserted on both sides.
   - `tests/roms/triangle.elf` submits a polygon the way a game does: parameters
     staged in a store queue and flushed to the TA's FIFO with `pref`, then
-    STARTRENDER.
+    STARTRENDER. It also sets up the BACKGROUND PLANE (parameters in video
+    memory, which is where the PVR reads them from) and the video clock, so the
+    gate checks a 640x480 picture of a red triangle of exactly 60000 pixels on
+    blue - every number one the program asked for.
 - **M4 DONE** (2026-08-27): discs, memory cards and firmware.
   `waterbox/run-gate.sh`: 21/21.
   - `tests/make-testdisc.py` builds a GD-ROM from scratch - three tracks, an
@@ -164,6 +167,23 @@ Chimera's firmware channel once the machine runs.
   package, the way gpgx serves four systems.
 
 ## Sharp edges hit
+
+- **Two windows onto video memory, and only one of them is the PVR's.** The
+  32-bit window (0xA5xxxxxx from the SH4) is what everything the PVR reads for
+  ITSELF is addressed in - the region array, the object pointer blocks, the
+  background parameters - and the emulator maps it into video memory the same
+  way on both sides (`pvr_map32`). The linear-looking 0xA4 window puts data
+  where the PVR does not look, and the picture simply does not appear.
+- **Flycast's TA writes no object lists.** A render is found by following the
+  region array to an object pointer block and reading the parameter address
+  from its first word; real hardware's TA writes that word while it builds the
+  lists, and a high-level TA builds no lists at all - so nothing writes it and
+  the render is never identified. The gate's own program writes it, because on
+  hardware it would be there.
+- **ISP_BACKGND_D is at 0x88 and ISP_BACKGND_T at 0x8C.** Swapping them costs
+  an afternoon: the background reads its parameters from a strip_base computed
+  out of a depth value, finds zeros, and draws black - which looks exactly like
+  "the background is not implemented yet".
 
 - **A frontend mounts ONE file, under a name of its choosing.** Flycast decides
   what a file is from its extension, and the plain-rom path hands the core its
