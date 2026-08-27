@@ -126,10 +126,10 @@ if [ -d "$wd" ]; then
 	# Every domain must be present, non-empty and hashed. VRAM and sound RAM
 	# matter to a movie's watch window as much as system RAM does.
 	doms="$("$nat/run-native" "$wd" --frames 5 2>/dev/null | grep -c '^domain\[')"
-	if [ "$doms" = "3" ]; then
-		report "domains" PASS "System RAM, VRAM and Sound RAM exposed"
+	if [ "$doms" = "4" ]; then
+		report "domains" PASS "System RAM, VRAM, Sound RAM and Flash exposed"
 	else
-		report "domains" FAIL "$doms domains, want 3"
+		report "domains" FAIL "$doms domains, want 4"
 	fi
 fi
 

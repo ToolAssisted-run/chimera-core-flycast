@@ -1,0 +1,4 @@
+frames=1
+out=/home/jaffar/chimera-core-flycast/waterbox/tests/work/keys.ram.bin
+meta=/home/jaffar/chimera-core-flycast/waterbox/tests/work/keys.meta.txt
+shot=

@@ -1,0 +1,58 @@
+{
+	"_comment": [
+		"Default bindings for the Dreamcast controller this package declares. The frontend ships",
+		"no bindings of its own - a package that declares a controller says how it is played by",
+		"default, and the user's own bindings always win. The face-button layout follows the",
+		"machine's: A and B are the lower pair, X and Y above them. The triggers are ANALOG, so",
+		"they are bound as axes rather than as buttons, which is what lets a game read how far",
+		"they are pressed."
+	],
+	"AllTrollers": {
+		"Dreamcast Controller": {
+			"Up": "Up, J1 POV1U, X1 DpadUp, X1 LStickUp",
+			"Down": "Down, J1 POV1D, X1 DpadDown, X1 LStickDown",
+			"Left": "Left, J1 POV1L, X1 DpadLeft, X1 LStickLeft",
+			"Right": "Right, J1 POV1R, X1 DpadRight, X1 LStickRight",
+			"A": "X, J1 B2, X1 A",
+			"B": "Z, J1 B3, X1 B",
+			"X": "S, J1 B1, X1 X",
+			"Y": "A, J1 B4, X1 Y",
+			"Start": "Enter, J1 B10, X1 Start"
+		}
+	},
+	"AllTrollersAutoFire": {
+		"Dreamcast Controller": {}
+	},
+	"AllTrollersAnalog": {
+		"Dreamcast Controller": {
+			"Stick X": {
+				"Value": "X1 LeftThumbX Axis",
+				"Mult": 1.0,
+				"Deadzone": 0.1,
+				"ButtonBindPositive": "",
+				"ButtonBindNegative": ""
+			},
+			"Stick Y": {
+				"Value": "X1 LeftThumbY Axis",
+				"Mult": 1.0,
+				"Deadzone": 0.1,
+				"ButtonBindPositive": "",
+				"ButtonBindNegative": ""
+			},
+			"Left Trigger": {
+				"Value": "X1 LeftTrigger Axis",
+				"Mult": 1.0,
+				"Deadzone": 0.0,
+				"ButtonBindPositive": "Q",
+				"ButtonBindNegative": ""
+			},
+			"Right Trigger": {
+				"Value": "X1 RightTrigger Axis",
+				"Mult": 1.0,
+				"Deadzone": 0.0,
+				"ButtonBindPositive": "W",
+				"ButtonBindNegative": ""
+			}
+		}
+	}
+}

@@ -1,0 +1,1 @@
+Dreamcast Controller: 9 bindings and 4 analog bindings adopted from the package

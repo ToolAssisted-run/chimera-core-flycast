@@ -1,0 +1,42 @@
+{
+  "package": "flycast",
+  "effectiveTerms": "GPL-2.0-or-later",
+  "commercialUse": "allowed under the GPL",
+  "note": "The built core combines this repository's integration with Flycast and is distributed under the GPL-2.0-or-later. The software rasteriser is skmp's refsw from libswirl, BSD-3-Clause, which the GPL permits; libchdr, zlib, zstd and lzma are permissive likewise.",
+  "components": [
+    {
+      "name": "chimera-core-flycast (integration)",
+      "license": "MIT, and Flycast's terms for patches/",
+      "url": "https://github.com/ToolAssisted-run/chimera-core-flycast",
+      "commit": "{selfCommit}",
+      "file": "LICENSE",
+      "sourceUrl": "https://github.com/ToolAssisted-run/chimera-core-flycast/archive/{commit}.tar.gz"
+    },
+    {
+      "name": "Flycast",
+      "license": "GPL-2.0-or-later",
+      "url": "https://github.com/flyinghead/flycast",
+      "commit": "{submodule:extern/flycast}",
+      "file": "extern/flycast/LICENSE",
+      "sourceUrl": "https://github.com/flyinghead/flycast/archive/{commit}.tar.gz"
+    },
+    {
+      "name": "refsw (reference software rasteriser, from libswirl)",
+      "license": "BSD-3-Clause",
+      "url": "https://github.com/skmp/minicast",
+      "file": "waterbox/refsw/license/bsd"
+    },
+    {
+      "name": "libchdr (with zlib, zstd and lzma)",
+      "license": "BSD-3-Clause, zlib, BSD-3-Clause and public domain respectively",
+      "url": "https://github.com/rtissera/libchdr",
+      "file": "extern/flycast/core/deps/libchdr/LICENSE.txt"
+    },
+    {
+      "name": "xxHash",
+      "license": "BSD-2-Clause",
+      "url": "https://github.com/Cyan4973/xxHash",
+      "file": "extern/flycast/core/deps/xxHash/LICENSE"
+    }
+  ]
+}

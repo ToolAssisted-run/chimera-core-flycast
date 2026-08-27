@@ -33,6 +33,7 @@
 #include "types.h"
 #include "emulator.h"
 #include "cfg/option.h"
+#include "cfg/cfg.h"
 #include "hw/maple/maple_devs.h"
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_if.h"
@@ -40,6 +41,7 @@
 #include "hw/sh4/sh4_mem.h"
 #include "hw/aica/aica_if.h"
 #include "hw/pvr/pvr_mem.h"
+#include "hw/flashrom/nvmem.h"
 #include "hw/pvr/Renderer_if.h"
 #include "stdclass.h"
 
@@ -154,17 +156,66 @@ extern "C" int chimera_pinned_console_id(uint8_t id[6])
 	return 1;
 }
 
-/* Whether the project supplied a real bios. The frontend mounts firmware by
- * the name the package declares (see waterbox.config), so its presence is the
- * question, and the answer decides between the machine's own bios and the HLE
- * one. */
-static bool FirmwarePresent()
+/* A setting whose value is one of a list, as an index into that list. The
+ * package declares the names (see waterbox.config); Flycast wants the numbers.
+ */
+static int SettingIndex(const char *name, const char *const *options, int count, int fallback)
 {
-	FILE *f = fopen("dc_boot.bin", "rb");
-	if (f == nullptr)
-		return false;
-	fclose(f);
-	return true;
+	char value[32];
+	strncpy(value, options[fallback], sizeof(value) - 1);
+	value[sizeof(value) - 1] = '\0';
+	wbx_setting_str(name, value, sizeof(value));
+	for (int i = 0; i < count; i++)
+		if (!strcmp(value, options[i]))
+			return i;
+	return fallback;
+}
+
+/* What kind of Dreamcast this is. All three live in the machine's flash, all
+ * three are things a game can read and act on, and none of them is a display
+ * preference - so they are part of the project.
+ *
+ * This is applied TWICE, and has to be. The flash is built during init(), so
+ * the region and language must be set before then or the machine is stamped
+ * with defaults; and init() and loadGame() both load settings of their own,
+ * which would overwrite anything set before them. Setting them on both sides
+ * is the honest way to be sure, given Flycast expects a front end that owns a
+ * config file and this core has none.
+ */
+static void ApplyMachineSettings()
+{
+	static const char *const regions[] = { "japan", "usa", "europe" };
+	static const char *const languages[] = { "japanese", "english", "german",
+		"french", "spanish", "italian" };
+	static const char *const broadcasts[] = { "ntsc", "pal", "palM", "palN" };
+
+	/* Through Flycast's own config, not by assigning to the options.
+	 * loadGame() RESETS every option and reloads them from the config
+	 * immediately before it builds the machine's flash, so an assignment made
+	 * beforehand is thrown away and one made afterwards is too late for the
+	 * flash - which is where the region and language actually live. A
+	 * TRANSIENT config entry is the mechanism for a front end that has no
+	 * config file: the reload reads it, and nothing ever writes it out. */
+	/* section "config", key "Dreamcast.Region": an Option's section defaults to
+	 * "config" and its name is the whole dotted string, which is not what the
+	 * dot suggests. */
+	config::setTransient("config", "Dreamcast.Region",
+		std::to_string(SettingIndex("region", regions, 3, 1)));
+	config::setTransient("config", "Dreamcast.Language",
+		std::to_string(SettingIndex("language", languages, 6, 1)));
+	config::setTransient("config", "Dreamcast.Broadcast",
+		std::to_string(SettingIndex("broadcast", broadcasts, 4, 0)));
+}
+
+/* Which bios this machine runs, which is a PROJECT decision rather than a
+ * question about what files happen to be lying around: a machine with its own
+ * bios and one with an HLE reimplementation are different machines and do not
+ * share movies. The setting says which; the frontend guarantees the files are
+ * mounted when it says "real" (see waterbox.config's firmware conditions). */
+static bool UseRealBios()
+{
+	static const char *const options[] = { "hle", "real" };
+	return SettingIndex("bios", options, 2, 0) == 1;
 }
 
 /* ---------------------------------------------------------------------------
@@ -194,7 +245,9 @@ ECL_EXPORT int Init(void)
 
 	set_user_data_dir("./");
 	add_system_data_dir("./");
-	config::UseReios = !FirmwarePresent();
+	config::UseReios = !UseRealBios();
+
+	ApplyMachineSettings();
 
 	try
 	{
@@ -224,6 +277,8 @@ ECL_EXPORT int Init(void)
 		 * machine a movie assumes unless a project says otherwise. The VMU is
 		 * part of that machine, so the frontend gets its contents through the
 		 * save-data channel rather than the core keeping a file somewhere. */
+		ApplyMachineSettings();
+
 		config::MapleMainDevices[0] = MDT_SegaController;
 		config::MapleExpansionDevices[0][0] = MDT_SegaVMU;
 		config::MapleExpansionDevices[0][1] = MDT_None;
@@ -331,10 +386,17 @@ static int64_t VramSize() { return settings.platform.vram_size; }
 static u8 *AramPtr() { return &aica::aica_ram[0]; }
 static int64_t AramSize() { return settings.platform.aram_size; }
 
+static u8 *FlashPtr() { return nvmem::getFlashData(); }
+static int64_t FlashSize() { return settings.platform.flash_size; }
+
 static const Domain g_domains[] = {
 	{ "System RAM", RamPtr, RamSize },
 	{ "VRAM", VramPtr, VramSize },
 	{ "Sound RAM", AramPtr, AramSize },
+	/* The flash is where the machine keeps what it is: region, language, the
+	 * date, the console id, and whatever a game wrote to the system area. A
+	 * watch window that cannot see it cannot see why two machines differ. */
+	{ "Flash", FlashPtr, FlashSize },
 };
 #define DOMAIN_COUNT ((int)(sizeof(g_domains) / sizeof(g_domains[0])))
 

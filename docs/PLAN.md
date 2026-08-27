@@ -146,12 +146,48 @@ Chimera's firmware channel once the machine runs.
     falls back to the HLE bios when a project has none. UNTESTED in the
     positive direction - a real bios is copyrighted and this repository has
     none - so what is proven is that its absence is handled.
-- **M5 - the frontend leg.** The package inside Chimera: settings, keybinds,
-  the file wizard.
+- **M5 DONE** (2026-08-27): the package runs inside Chimera.
+  `waterbox/tests/run-frontend.sh`: 3/3 - the frontend's machine reaches the
+  same System RAM as the native reference over 300 frames, the region setting
+  changes the machine's flash, and the package's bindings (9 buttons and 4
+  analog) become the frontend's defaults.
+  - `waterbox.config` declares the machine: one Dreamcast controller with its
+    stick and two ANALOG triggers, four settings that shape the machine (bios,
+    clock, region, language, broadcast), and a fourth memory domain - the flash,
+    which is where a Dreamcast keeps what KIND of machine it is.
+  - Firmware is conditioned on the `bios` setting rather than declared
+    optional, because this frontend has no such thing as optional firmware:
+    every declared entry that applies is required, and variants are separate
+    entries selected by a setting. "hle" and "real" are different machines and
+    do not share movies.
 - **M6 - beyond Dreamcast.** NAOMI and Atomiswave as additional machines in one
   package, the way gpgx serves four systems.
 
 ## Sharp edges hit
+
+- **A frontend mounts ONE file, under a name of its choosing.** Flycast decides
+  what a file is from its extension, and the plain-rom path hands the core its
+  content as `disc` with no extension at all - so nothing matched and every
+  disc was "an unknown format". patches/0007 makes an UNKNOWN extension mean
+  "look at the file" (every driver validates its own content anyway) and lets a
+  driver decline while sniffing rather than ending the load. A named file still
+  fails loudly: a corrupt .chd is a corrupt .chd.
+  It also means a multi-track `.gdi` is a project with a directory behind it,
+  not something the command line can express - so the frontend gate boots the
+  single-file ELF and the core gate keeps the GD-ROM.
+- **A patch that touches two files is a patch that can vanish.** `git apply
+  --check` refuses a patch whose hunks are already applied, and refuses the
+  WHOLE patch - so reverting one file by hand silently dropped the console-id
+  pin from a two-file patch, and only the equivalence gate noticed. Patches are
+  one file each now, and apply-patches.sh warns when one neither applies nor is
+  applied.
+- **Settings that arrive too late.** `loadGame()` RESETS every Flycast option
+  and reloads them immediately before building the machine's flash, so a value
+  assigned beforehand is thrown away and one assigned afterwards is too late
+  for the region and language that live in that flash. `config::setTransient`
+  is the mechanism for a front end with no config file - and the section is
+  "config" with the key "Dreamcast.Region", not the section "Dreamcast", which
+  the dotted name suggests.
 
 - **The machine took its identity from the host.** Two of them, both caught by
   the gate as a handful of RAM bytes differing while the program's own counter
@@ -224,6 +260,8 @@ Chimera's firmware channel once the machine runs.
 - **2026-08-27** Feasibility settled (this document). Repo created, upstream
   pinned at `c3763d8`. Headless CMake configure proven; the headless BUILD gets
   as far as the two findings above, which is the M1 starting line.
+- **2026-08-27** M5 done: the package loads in Chimera, its settings reach the
+  machine, and its bindings become the frontend's defaults.
 - **2026-08-27** M4 done: a GD-ROM this repository builds from scratch boots
   through the HLE bios, memory cards leave through the save-data channel, and
   the machine stopped taking its identity from the host.

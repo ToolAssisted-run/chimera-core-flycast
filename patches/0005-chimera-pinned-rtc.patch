@@ -1,0 +1,25 @@
+diff --git a/core/hw/aica/aica_if.cpp b/core/hw/aica/aica_if.cpp
+index 92bfa83..bcaca4d 100644
+--- a/core/hw/aica/aica_if.cpp
++++ b/core/hw/aica/aica_if.cpp
+@@ -34,8 +34,20 @@ int dma_sched_id = -1;
+ static u32 RealTimeClock;
+ int rtc_schid = -1;
+ 
++/* chimera: a machine whose clock is the wall clock is a DIFFERENT MACHINE
++ * every time it is powered on, and a movie recorded on one does not replay on
++ * another - the Dreamcast writes the time into RAM at boot, and the bios and
++ * games read it. A host that needs the machine to be a function of its project
++ * pins the time here; weakly declared, so everyone else keeps the clock. */
++extern "C" int chimera_pinned_rtc(u32 *rtc) __attribute__((weak));
++extern "C" int chimera_pinned_rtc(u32 *rtc) { (void)rtc; return 0; }
++
+ u32 GetRTC_now()
+ {
++	u32 pinned = 0;
++	if (chimera_pinned_rtc(&pinned))
++		return pinned;
++
+ 	// rtc kept static for netplay when savestate is not loaded
+ 	if (config::GGPOEnable)
+ 		// 1/1/70 00:00:00

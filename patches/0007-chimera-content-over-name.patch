@@ -1,0 +1,197 @@
+diff --git a/core/emulator.cpp b/core/emulator.cpp
+index e913f61..d208306 100644
+--- a/core/emulator.cpp
++++ b/core/emulator.cpp
+@@ -606,7 +606,7 @@ void Emulator::loadGame(const char *path, LoadProgress *progress)
+ 			else
+ 			{
+ 				std::string extension = get_file_extension(settings.content.path);
+-				if (extension != "elf")
++				if (extension != "elf" && !isElfContent(settings.content.path))
+ 				{
+ 					if (gdr::initDrive(settings.content.path))
+ 					{
+diff --git a/core/imgread/cdi.cpp b/core/imgread/cdi.cpp
+index b79bab3..e3ba824 100644
+--- a/core/imgread/cdi.cpp
++++ b/core/imgread/cdi.cpp
+@@ -1,4 +1,6 @@
+ #include "common.h"
++
++bool discExtensionAllows(const char *file, const char *ext);
+ #include "stdclass.h"
+ #include "oslib/storage.h"
+ #include "oslib/i18n.h"
+@@ -6,7 +8,7 @@
+ 
+ Disc* cdi_parse(const char* file, std::vector<u8> *digest)
+ {
+-	if (get_file_extension(file) != "cdi")
++	if (!discExtensionAllows(file, "cdi"))
+ 		return nullptr;
+ 
+ 	hostfs::File *fsource = hostfs::storage().openFile(file, "rb");
+diff --git a/core/imgread/chd.cpp b/core/imgread/chd.cpp
+index 0c7f382..571a622 100644
+--- a/core/imgread/chd.cpp
++++ b/core/imgread/chd.cpp
+@@ -1,4 +1,6 @@
+ #include "common.h"
++
++bool discExtensionAllows(const char *file, const char *ext);
+ #include "stdclass.h"
+ #include "oslib/storage.h"
+ #include "oslib/i18n.h"
+@@ -251,7 +253,7 @@ Disc* chd_parse(const char* file, std::vector<u8> *digest)
+ 	if (!strstr(&file[strlen(file) - 3], "chd"))
+ 		return nullptr;
+ #else
+-	if (get_file_extension(file) != "chd")
++	if (!discExtensionAllows(file, "chd"))
+ 		return nullptr;
+ #endif
+ 
+diff --git a/core/imgread/common.cpp b/core/imgread/common.cpp
+index 193c9ef..3c481b4 100644
+--- a/core/imgread/common.cpp
++++ b/core/imgread/common.cpp
+@@ -84,11 +84,49 @@ static bool convertSector(u8* in_buff , u8* out_buff , int from , int to,int sec
+ 	return true;
+ }
+ 
++/* chimera: whether a driver should even look at this file.
++ *
++ * Every driver refuses a path whose extension is not its own, which is fine
++ * when files have names. A sandboxed core is handed its content under a fixed
++ * mount name with no extension at all, and then nothing matches and the disc
++ * is "an unknown format" - though every driver here validates what it reads
++ * anyway. So an UNKNOWN extension now means "look at the file", while a known
++ * one still belongs to exactly one driver.
++ */
++bool discExtensionAllows(const char *file, const char *ext)
++{
++	const std::string actual = get_file_extension(file);
++	if (actual == ext)
++		return true;
++	for (const char *known : { "chd", "gdi", "cdi", "cue", "elf" })
++		if (actual == known)
++			return false;
++	return true;
++}
++
+ Disc* OpenDisc(const std::string& path, std::vector<u8> *digest)
+ {
++	/* chimera: when the name told us nothing (see discExtensionAllows), every
++	 * driver gets a look - and one that rejects what it finds must DECLINE
++	 * rather than end the load, because the next may be the right one. A named
++	 * file still fails loudly: a corrupt .chd is a corrupt .chd, not an
++	 * invitation to try the .cue reader on it. */
++	const bool sniffing = discExtensionAllows(path.c_str(), "");
+ 	for (auto driver : drivers)
+ 	{
+-		Disc *disc = driver(path.c_str(), digest);
++		Disc *disc = nullptr;
++		if (sniffing)
++		{
++			try {
++				disc = driver(path.c_str(), digest);
++			} catch (const FlycastException&) {
++				continue;
++			}
++		}
++		else
++		{
++			disc = driver(path.c_str(), digest);
++		}
+ 
+ 		if (disc != nullptr)
+ 			return disc;
+diff --git a/core/imgread/cue.cpp b/core/imgread/cue.cpp
+index b0b764f..bcf9e00 100644
+--- a/core/imgread/cue.cpp
++++ b/core/imgread/cue.cpp
+@@ -18,6 +18,8 @@
+  */
+ 
+ #include "common.h"
++
++bool discExtensionAllows(const char *file, const char *ext);
+ #include "stdclass.h"
+ #include "oslib/storage.h"
+ #include "oslib/i18n.h"
+@@ -46,7 +48,7 @@ static u32 getSectorSize(const std::string& type) {
+ 
+ Disc* cue_parse(const char* file, std::vector<u8> *digest)
+ {
+-	if (get_file_extension(file) != "cue")
++	if (!discExtensionAllows(file, "cue"))
+ 		return nullptr;
+ 
+ 	hostfs::File *fsource = hostfs::storage().openFile(file, "rb");
+diff --git a/core/imgread/gdi.cpp b/core/imgread/gdi.cpp
+index 7201a48..0109010 100644
+--- a/core/imgread/gdi.cpp
++++ b/core/imgread/gdi.cpp
+@@ -1,4 +1,6 @@
+ #include "common.h"
++
++bool discExtensionAllows(const char *file, const char *ext);
+ #include "stdclass.h"
+ #include "oslib/storage.h"
+ #include "oslib/i18n.h"
+@@ -154,7 +156,7 @@ static Disc* load_gdi(const char* file, std::vector<u8> *digest)
+ 
+ Disc* gdi_parse(const char* file, std::vector<u8> *digest)
+ {
+-	if (get_file_extension(file) != "gdi")
++	if (!discExtensionAllows(file, "gdi"))
+ 		return nullptr;
+ 
+ 	return load_gdi(file, digest);
+diff --git a/core/reios/reios.cpp b/core/reios/reios.cpp
+index 0ecde79..3110d33 100644
+--- a/core/reios/reios.cpp
++++ b/core/reios/reios.cpp
+@@ -61,6 +61,22 @@ static void reios_pre_init()
+ 	}
+ }
+ 
++/* chimera: whether this file is a naked SH4 binary, by its four magic bytes
++ * rather than by its name. A sandboxed core is handed its content under a fixed
++ * mount name with no extension at all, and the magic is a better answer than a
++ * name anyway. */
++bool isElfContent(const std::string& path)
++{
++	FILE *probe = nowide::fopen(path.c_str(), "rb");
++	if (probe == nullptr)
++		return false;
++	char magic[4] = {0};
++	const bool isElf = std::fread(magic, 1, sizeof(magic), probe) == sizeof(magic)
++		&& memcmp(magic, "\x7f" "ELF", 4) == 0;
++	std::fclose(probe);
++	return isElf;
++}
++
+ static bool reios_locate_bootfile(const char* bootfile)
+ {
+ 	if (disc == nullptr)
+@@ -656,6 +672,8 @@ static void reios_boot()
+ 	WriteMem32(0x80800000, 0xEAFFFFFE);
+ 
+ 	std::string extension = get_file_extension(settings.content.path);
++	if (isElfContent(settings.content.path))
++		extension = "elf";
+ 	if (extension == "elf")
+ 	{
+ 		if (!reios_loadElf(settings.content.path))
+diff --git a/core/reios/reios.h b/core/reios/reios.h
+index a507753..0763a1a 100644
+--- a/core/reios/reios.h
++++ b/core/reios/reios.h
+@@ -44,3 +44,6 @@ struct ip_meta_t
+ extern ip_meta_t ip_meta;
+ 
+ #define REIOS_OPCODE 0x085B
++
++/* chimera: is this file a naked SH4 binary, by content rather than by name? */
++bool isElfContent(const std::string& path);
