@@ -4,12 +4,13 @@
 # reference build (the same sources compiled natively), and must survive a
 # whole-machine savestate round-trip around every frame.
 #
-# M1 SCOPE. The machine runs; it does not yet draw (Flycast has no software
-# renderer - see docs/PLAN.md), and it runs this repository's own SH4 program
-# rather than a game, because a Dreamcast game is somebody's copyrighted disc.
-# So what this proves today is the thing everything else rests on: 200 million
-# SH4 instructions, the AICA, the timers and the memory system, identical
-# inside the sandbox and out.
+# SCOPE. The machine does not yet DRAW: Flycast has no software renderer, and
+# porting one is its own milestone (docs/PLAN.md). It runs this repository's own
+# SH4 programs rather than a game, because a Dreamcast game is somebody's
+# copyrighted disc. What is proven here is everything the picture will later
+# rest on: hundreds of millions of SH4 instructions, the AICA, the timers, the
+# memory system, and the maple bus carrying a frontend's input to the machine -
+# identical inside the sandbox and out.
 #
 # Usage: ./run-gate.sh [-n <native build dir>] [-g <guest build dir>]
 set -u
@@ -45,6 +46,7 @@ printf "%-30s %-6s %s\n" "-----" "------" "------"
 tests=(
 	"counter counter.elf 300"
 	"counterShort counter.elf 60"
+	"padread padread.elf 120"
 )
 
 for t in "${tests[@]}"; do
@@ -91,6 +93,46 @@ for t in "${tests[@]}"; do
 		report "$name:savestate" FAIL "$(diff "$work/box.txt" "$work/rr.txt" | tr '\n' ' ' | head -c 120)"
 	fi
 done
+
+# ---- input, through the maple bus -----------------------------------------
+# padread.elf builds a maple frame, starts the DMA and sums the controller's
+# answer into RAM every iteration, so a different input schedule MUST leave a
+# different machine. This is what separates "the frontend sets a variable" from
+# "the machine read its controller": the first attempt at this core wrote the
+# desktop input layer's kcode[] instead of mapleInputState[], which links, runs,
+# and changes nothing at all.
+wd="$work/padread"
+if [ -d "$wd" ]; then
+	idle="$("$nat/run-native" "$wd" --frames 120 2>/dev/null | digests)"
+	held="$("$nat/run-native" "$wd" --frames 120 --exercise 2>/dev/null | digests)"
+	boxheld="$("$nat/run-wbx" "$gst/core.wbx" "$wd" --frames 120 --exercise 2>/dev/null | digests)"
+	if [ "$idle" = "$held" ]; then
+		report "input:shaped" FAIL "input made no difference to the machine"
+	elif [ "$held" != "$boxheld" ]; then
+		report "input:shaped" FAIL "native and sandbox disagree with input held"
+	else
+		report "input:shaped" PASS "the machine read its pad: idle != held, native == waterboxed"
+	fi
+
+	# Lag detection is the frontend's question "did this frame look at the
+	# input", answered by patches/0002 where maple serves a controller read.
+	lag_pad="$("$nat/run-native" "$wd" --frames 30 2>/dev/null | sed -n 's/^lagFrames=//p')"
+	lag_cnt="$("$nat/run-native" "$work/counter" --frames 30 2>/dev/null | sed -n 's/^lagFrames=//p')"
+	if [ "$lag_pad" = "0" ] && [ "$lag_cnt" = "30" ]; then
+		report "input:lag" PASS "polling reports 0 lag frames, not polling reports 30"
+	else
+		report "input:lag" FAIL "pad=$lag_pad counter=$lag_cnt (want 0 and 30)"
+	fi
+
+	# Every domain must be present, non-empty and hashed. VRAM and sound RAM
+	# matter to a movie's watch window as much as system RAM does.
+	doms="$("$nat/run-native" "$wd" --frames 5 2>/dev/null | grep -c '^domain\[')"
+	if [ "$doms" = "3" ]; then
+		report "domains" PASS "System RAM, VRAM and Sound RAM exposed"
+	else
+		report "domains" FAIL "$doms domains, want 3"
+	fi
+fi
 
 # The Stella lesson: the native reference is the only place a real clock and
 # real threads still tick, so it is where nondeterminism shows up. Two runs of

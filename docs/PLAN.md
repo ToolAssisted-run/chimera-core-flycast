@@ -98,9 +98,19 @@ Chimera's firmware channel once the machine runs.
     assembles eight SH4 instructions into an ELF, which the HLE bios boots at
     0x8C010000 with no bios, no disc and no SH4 toolchain. In 300 frames the
     machine executes about 564 million instructions.
-- **M2 - input, memory domains, savestates.** The gate grows the legs every
-  other core has: input visibly shapes the machine, per-frame savestate
-  round-trips are lossless, memory domains are exposed.
+- **M2 DONE** (2026-08-27): input reaches the machine, and three memory
+  domains are exposed. `waterbox/run-gate.sh`: 13/13.
+  - `tests/sh4asm.py` is a small SH4 assembler, because the second test program
+    does something a list of hex opcodes cannot document: `padread.elf` builds
+    a maple command frame, points the DMA at it, starts it, spins for the
+    answer, and sums the controller's condition word into RAM - a real maple
+    transaction, roughly 200 of them per frame.
+  - That is what makes the input leg a proof rather than an assumption: with a
+    different input schedule the machine MUST end up in a different state, and
+    it does, identically native and sandboxed.
+  - Lag detection through patches/0002: the pad reader reports 0 lag frames,
+    the counter (which never asks) reports every frame.
+  - Domains: System RAM (16MB), VRAM (16MB), Sound RAM (8MB).
 - **M3 - the renderer.** Port refsw onto Flycast's TA context. Video digests
   join the gate.
 - **M4 - discs and firmware.** GD-ROM images (GDI/CDI/CHD) through the file
@@ -113,6 +123,13 @@ Chimera's firmware channel once the machine runs.
 
 ## Sharp edges hit
 
+- **The input global that does nothing.** `kcode[4]` in gamepad_device.h looks
+  like where a frontend writes button state. It is not: it belongs to the
+  desktop input layer, which reads real joysticks and then fills
+  `mapleInputState[]`, and that is what the controller actually reads. Writing
+  the wrong one links, runs, and leaves the machine byte-identical whether
+  buttons are held or not - which is exactly what the gate's input leg exists
+  to catch.
 - **A second thread stepping the same SH4.** `config::ThreadedRendering`
   decides, despite its name, whether `Emulator::start()` launches an emulation
   THREAD - and settings assigned before `init()`/`loadGame()` are overwritten
@@ -149,6 +166,8 @@ Chimera's firmware channel once the machine runs.
 - **2026-08-27** Feasibility settled (this document). Repo created, upstream
   pinned at `c3763d8`. Headless CMake configure proven; the headless BUILD gets
   as far as the two findings above, which is the M1 starting line.
+- **2026-08-27** M2 done: the machine reads its controller over the maple bus,
+  lag detection works, and VRAM and sound RAM joined system RAM as domains.
 - **2026-08-27** M1 done: a Dreamcast runs inside the sandbox, byte-identical
   to the native reference, savestates included. No patch was needed for the
   renderer after all - upstream's own `NO_REND` selects the renderer that draws

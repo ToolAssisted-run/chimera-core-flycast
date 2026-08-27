@@ -1,66 +1,145 @@
 #!/usr/bin/env python3
-"""Builds the gate's own Dreamcast program: a few SH4 instructions in an ELF.
+"""Builds the gate's own Dreamcast programs, as ELFs the HLE bios can boot.
 
 A core needs something to run before it can be gated, and a Dreamcast game is
-somebody's copyrighted disc. So this repository ships its own program instead -
-hand-assembled here, from opcodes, so that what the machine executes is
-readable in this file rather than trusted from a binary.
+somebody's copyrighted disc. So this repository ships its own programs instead,
+assembled here from readable SH4 (see sh4asm.py) so that what the machine is
+asked to do is auditable rather than trusted.
 
 Flycast's HLE bios boots a naked .elf at 0x8C010000 (see reios.cpp), which is
 what makes this possible with no bios, no disc and no SH4 toolchain.
 
-What it does: counts, forever, storing the count to a fixed address. That makes
-system RAM a direct function of how many instructions the machine executed, so
-the equivalence gate compares the one thing that must never differ - and a
-sandbox that ran even one cycle differently says so immediately.
+  counter.elf  counts, forever, into RAM. System RAM becomes a direct function
+               of how many instructions the machine executed, so the
+               equivalence gate compares the one thing that must never differ.
 
-Usage: make-testprog.py <out.elf>
+  padread.elf  reads the controller over the maple bus every iteration and
+               sums what it sees into RAM. That makes system RAM a function of
+               the INPUT as well, which is what lets the gate prove input
+               reaches the machine rather than assuming it.
+
+Usage: make-testprog.py <out dir>
 """
+import os
 import struct
 import sys
 
-LOAD_ADDR = 0x8C010000
-COUNTER = 0x8C011000
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from sh4asm import assemble  # noqa: E402
 
-# SH4, little-endian, 16-bit instructions.
+LOAD_ADDR = 0x8C010000
+
+# Every program starts by refusing interrupts. The HLE bios boots an ELF with
+# interrupts enabled and no handlers installed, so the first vblank vectors
+# through VBR into empty RAM and the machine dies on an illegal instruction.
+# Real homebrew installs handlers; these programs decline the interrupts.
+# MD=1 keeps them privileged, IMASK=15 blocks every maskable level.
+PROLOGUE = """
+        mov.l   #0x400000F0,r0
+        ldc     r0,sr
+"""
+
+COUNTER_ASM = PROLOGUE + """
+        mov.l   #0x8C011000,r1
+        mov     #0,r0
+loop:   add     #1,r0
+        mov.l   r0,@r1
+        bra     loop
+        nop
+"""
+
+# The maple bus, by hand.
 #
-#   0: D003   mov.l  @(3,pc),r0     ; r0 = SR value
-#   2: 400E   ldc    r0,sr          ; mask every interrupt level
-#   4: D103   mov.l  @(3,pc),r1     ; r1 = COUNTER
-#   6: E000   mov    #0,r0
-#   8: 7001   add    #1,r0          ; loop:
-#   A: 2102   mov.l  r0,@r1
-#   C: AFFC   bra    loop           ; pc+4 + (-4)*2 = 8
-#   E: 0009   nop                   ; delay slot, always executed
-#  10: .long  SR_VALUE
-#  14: .long  COUNTER
+# A Dreamcast controller is not memory-mapped: the SH4 builds a command frame
+# in RAM, points the maple DMA at it and starts it, and the answer lands in
+# another piece of RAM. This program does exactly that, once per iteration.
 #
-# The LDC comes first and is the whole reason this program is more than three
-# instructions: the HLE bios boots an ELF with interrupts ENABLED and no
-# handlers installed, so the first vblank vectors through VBR into empty RAM
-# and the machine dies on an illegal instruction. Real homebrew installs
-# handlers; this one refuses the interrupts instead. MD=1 keeps it privileged,
-# IMASK=15 blocks every maskable level.
-SR_VALUE = 0x400000F0
-CODE = [0xD003, 0x400E, 0xD103, 0xE000, 0x7001, 0x2102, 0xAFFC, 0x0009]
-TEXT = (b"".join(struct.pack("<H", op) for op in CODE)
-        + struct.pack("<I", SR_VALUE) + struct.pack("<I", COUNTER))
+#   frame at 0x8C012000 (physical 0x0C012000, 32-byte aligned as the DMA
+#   requires):
+#       word0  0x80000001  last transfer | one more word after the command | port A
+#       word1  0x0C012100  where to write the answer (physical, area 3)
+#       word2  0x01002009  len 1 | sender 0x00 | recipient 0x20 | GetCondition
+#       word3  0x01000000  the function being asked about: controller
+#
+#   the answer at 0x8C012100:
+#       word0  the response header
+#       word1  the function code, echoed back
+#       word2  the button state in the low 16 bits (ACTIVE LOW), with two
+#              analog axes above it
+#
+# SB_MDAPRO comes first: the DMA refuses addresses outside a window that
+# defaults to a slice of area 2, and 0x6155407F is the value that opens system
+# RAM to it.
+PADREAD_ASM = PROLOGUE + """
+        mov.l   #0xA05F6C8C,r1
+        mov.l   #0x6155407F,r2
+        mov.l   r2,@r1
+
+        mov.l   #0x8C012000,r1
+        mov.l   #0x80000001,r2
+        mov.l   r2,@r1
+        add     #4,r1
+        mov.l   #0x0C012100,r2
+        mov.l   r2,@r1
+        add     #4,r1
+        mov.l   #0x01002009,r2
+        mov.l   r2,@r1
+        add     #4,r1
+        mov.l   #0x01000000,r2
+        mov.l   r2,@r1
+
+loop:
+        mov.l   #0xA05F6C04,r1
+        mov.l   #0x0C012000,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F6C10,r1
+        mov     #0,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F6C14,r1
+        mov     #1,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F6C18,r1
+        mov     #1,r2
+        mov.l   r2,@r1
+
+wait:   mov.l   @r1,r2
+        tst     r2,r2
+        bf      wait
+
+        mov.l   #0x8C012108,r3
+        mov.l   @r3,r4
+
+        mov.l   #0x8C011004,r3
+        mov.l   r4,@r3
+
+        mov.l   #0x8C011000,r3
+        mov.l   @r3,r5
+        add     r4,r5
+        mov.l   r5,@r3
+
+        mov.l   #0x8C011008,r3
+        mov.l   @r3,r6
+        add     #1,r6
+        mov.l   r6,@r3
+
+        bra     loop
+        nop
+"""
+
+PROGRAMS = {"counter.elf": COUNTER_ASM, "padread.elf": PADREAD_ASM}
 
 EM_SH = 42
 ELF_HEADER_SIZE = 52
 PROGRAM_HEADER_SIZE = 32
-
-
 SECTION_HEADER_SIZE = 40
 
 
-def build() -> bytes:
-    entry = LOAD_ADDR
+def build(text: bytes) -> bytes:
     offset = ELF_HEADER_SIZE + PROGRAM_HEADER_SIZE
     # One null section header, because Flycast's libelf rejects a file whose
     # e_shstrndx is not less than e_shnum - and with no section table at all,
     # 0 is not less than 0. Nothing reads it; it exists to be counted.
-    shoff = offset + len(TEXT)
+    shoff = offset + len(text)
 
     ehdr = struct.pack(
         "<4sBBBBB7sHHIIIIIHHHHHH",
@@ -72,12 +151,12 @@ def build() -> bytes:
         2,          # ET_EXEC
         EM_SH,
         1,          # version
-        entry,
+        LOAD_ADDR,  # entry
         ELF_HEADER_SIZE,   # phoff
         shoff,
         0x9,               # flags: SH4 (EF_SH4)
         ELF_HEADER_SIZE,
-        PROGRAM_HEADER_SIZE, 1,   # phentsize, phnum
+        PROGRAM_HEADER_SIZE, 1,      # phentsize, phnum
         SECTION_HEADER_SIZE, 1, 0,   # shentsize, shnum, shstrndx
     )
 
@@ -87,22 +166,26 @@ def build() -> bytes:
         offset,
         LOAD_ADDR,      # vaddr
         LOAD_ADDR,      # paddr
-        len(TEXT),      # filesz
-        len(TEXT),      # memsz
+        len(text),      # filesz
+        len(text),      # memsz
         0x5,            # PF_R | PF_X
         4,              # align
     )
 
-    return ehdr + phdr + TEXT + bytes(SECTION_HEADER_SIZE)
+    return ehdr + phdr + text + bytes(SECTION_HEADER_SIZE)
 
 
 def main() -> None:
     if len(sys.argv) != 2:
         sys.exit(__doc__)
-    with open(sys.argv[1], "wb") as f:
-        f.write(build())
-    print(f"{sys.argv[1]}: {len(build())} bytes, "
-          f"{len(CODE)} instructions at {LOAD_ADDR:#x}, counter at {COUNTER:#x}")
+    outdir = sys.argv[1]
+    os.makedirs(outdir, exist_ok=True)
+    for name, source in PROGRAMS.items():
+        code = assemble(source, LOAD_ADDR)
+        path = os.path.join(outdir, name)
+        with open(path, "wb") as f:
+            f.write(build(code))
+        print(f"{path}: {len(code)} bytes of SH4 at {LOAD_ADDR:#x}")
 
 
 if __name__ == "__main__":

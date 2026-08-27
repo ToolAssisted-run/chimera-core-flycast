@@ -34,9 +34,12 @@
 #include "emulator.h"
 #include "cfg/option.h"
 #include "hw/maple/maple_devs.h"
+#include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_if.h"
 #include "hw/mem/addrspace.h"
 #include "hw/sh4/sh4_mem.h"
+#include "hw/aica/aica_if.h"
+#include "hw/pvr/pvr_mem.h"
 
 /* ---------------------------------------------------------------------------
  * What the frontend sees. A Dreamcast frame is 640x480 at 59.94Hz; M1 hands
@@ -64,11 +67,19 @@ enum {
 static uint8_t g_setButtons[BTN_COUNT];
 static uint8_t g_buttons[BTN_COUNT];
 
-/* Flycast's maple layer reads the pad through this: bit set = pressed, in the
- * Dreamcast's own bit order (see maple_devs.h's DC_BTN_*). */
-extern u32 kcode[4];
-extern s8 joyx[4], joyy[4];
-extern u8 rt[4], lt[4];
+/* the analog wire: the stick and the two triggers, in the frontend's order */
+enum { AXIS_X, AXIS_Y, AXIS_LTRIG, AXIS_RTRIG, AXIS_COUNT };
+static int16_t g_axes[AXIS_COUNT];
+
+/* Where a frontend's input actually enters the machine.
+ *
+ * There is a `kcode[4]` global in gamepad_device.h that looks like the answer
+ * and is not: that one belongs to the desktop input layer, which reads
+ * keyboards and joysticks and then FILLS mapleInputState. Writing to it links,
+ * runs, and does nothing at all - the first sandboxed pad test read a
+ * perfectly identical machine whether buttons were held or not. What the
+ * controller reads is mapleInputState[player], so that is what a frontend
+ * driving this core must write. */
 
 /* ---------------------------------------------------------------------------
  * Lag detection: the machine looking at its input is what a lag frame IS.
@@ -78,8 +89,10 @@ extern "C" void chimera_input_was_read(void) { g_inputRead = 1; }
 
 static void ApplyInput()
 {
+	MapleInputState& pad = mapleInputState[0];
+
 	u32 code = ~0u; /* Dreamcast buttons are ACTIVE LOW */
-	struct { int wire; u32 mask; } map[] = {
+	static const struct { int wire; u32 mask; } map[] = {
 		{ BTN_A, DC_BTN_A }, { BTN_B, DC_BTN_B }, { BTN_X, DC_BTN_X },
 		{ BTN_Y, DC_BTN_Y }, { BTN_START, DC_BTN_START },
 		{ BTN_UP, DC_DPAD_UP }, { BTN_DOWN, DC_DPAD_DOWN },
@@ -87,9 +100,15 @@ static void ApplyInput()
 	};
 	for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++)
 		if (g_buttons[map[i].wire]) code &= ~map[i].mask;
-	kcode[0] = code;
-	joyx[0] = joyy[0] = 0;
-	lt[0] = rt[0] = 0;
+	pad.kcode = code;
+
+	/* The triggers are half axes (0..255) and the sticks are full axes
+	 * (-32768..32767); the frontend sends every axis as a signed 16-bit
+	 * value, so the triggers are folded into their own range here. */
+	pad.halfAxes[PJTI_L] = (u16)((g_axes[AXIS_LTRIG] + 32768) >> 8);
+	pad.halfAxes[PJTI_R] = (u16)((g_axes[AXIS_RTRIG] + 32768) >> 8);
+	pad.fullAxes[PJAI_X1] = g_axes[AXIS_X];
+	pad.fullAxes[PJAI_Y1] = g_axes[AXIS_Y];
 }
 
 /* ---------------------------------------------------------------------------
@@ -155,7 +174,10 @@ ECL_EXPORT void SetButton(int index, int value)
 	if (index >= 0 && index < BTN_COUNT) g_setButtons[index] = value ? 1 : 0;
 }
 
-ECL_EXPORT void SetAxis(int index, int value) { (void)index; (void)value; }
+ECL_EXPORT void SetAxis(int index, int value)
+{
+	if (index >= 0 && index < AXIS_COUNT) g_axes[index] = (int16_t)value;
+}
 
 ECL_EXPORT void FrameAdvance(uint64_t packed)
 {
@@ -191,24 +213,48 @@ ECL_EXPORT int InputWasRead(void) { return g_inputRead; }
  * system RAM. VRAM, the AICA's own RAM and the flash follow once the gate is
  * green on this one.
  */
-ECL_EXPORT int GetMemoryDomainCount(void) { return 1; }
+/* The domains a movie and a watch window need. System RAM is the machine's
+ * memory; VRAM is what the PVR draws from and where a renderer's output will
+ * land (M3); the AICA's sound RAM is where samples and the sound CPU's own
+ * program live. Each is a plain pointer into the guest's heap, because with no
+ * virtual memory (see vmem-stub.cpp) that is exactly what Flycast allocated. */
+struct Domain { const char *name; u8 *(*ptr)(); int64_t (*size)(); };
+
+static u8 *RamPtr() { return &mem_b[0]; }
+static int64_t RamSize() { return settings.platform.ram_size; }
+static u8 *VramPtr() { return &vram[0]; }
+static int64_t VramSize() { return settings.platform.vram_size; }
+static u8 *AramPtr() { return &aica::aica_ram[0]; }
+static int64_t AramSize() { return settings.platform.aram_size; }
+
+static const Domain g_domains[] = {
+	{ "System RAM", RamPtr, RamSize },
+	{ "VRAM", VramPtr, VramSize },
+	{ "Sound RAM", AramPtr, AramSize },
+};
+#define DOMAIN_COUNT ((int)(sizeof(g_domains) / sizeof(g_domains[0])))
+
+ECL_EXPORT int GetMemoryDomainCount(void) { return DOMAIN_COUNT; }
 
 ECL_EXPORT const char *GetMemoryDomainName(int which)
 {
-	return which == 0 ? "System RAM" : nullptr;
+	return (which >= 0 && which < DOMAIN_COUNT) ? g_domains[which].name : nullptr;
 }
 
 ECL_EXPORT uint8_t *GetMemoryDomainPtr(int which)
 {
-	return which == 0 ? &mem_b[0] : nullptr;
+	return (which >= 0 && which < DOMAIN_COUNT) ? g_domains[which].ptr() : nullptr;
 }
 
 ECL_EXPORT int64_t GetMemoryDomainSize(int which)
 {
-	return which == 0 ? settings.platform.ram_size : 0;
+	return (which >= 0 && which < DOMAIN_COUNT) ? g_domains[which].size() : 0;
 }
 
-ECL_EXPORT int GetMemoryDomainWritable(int which) { return which == 0 ? 1 : 0; }
+ECL_EXPORT int GetMemoryDomainWritable(int which)
+{
+	return (which >= 0 && which < DOMAIN_COUNT) ? 1 : 0;
+}
 
 /* M1 saves nothing: the VMU is a later milestone (docs/PLAN.md). */
 ECL_EXPORT int32_t GetSaveDataFileCount(void) { return 0; }
