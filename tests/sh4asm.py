@@ -46,6 +46,24 @@ def _imm(text: str) -> int:
     return int(text[1:], 0)
 
 
+def _split_args(text: str) -> list[str]:
+    """Split on commas that are not inside parentheses: `@(4,r3)` is one arg."""
+    args, depth, current = [], 0, ""
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            args.append(current.strip())
+            current = ""
+        else:
+            current += ch
+    if current.strip():
+        args.append(current.strip())
+    return args
+
+
 class Assembler:
     """Two passes: sizes and labels first, then encodings."""
 
@@ -73,7 +91,7 @@ class Assembler:
                 continue
             parts = line.split(None, 1)
             mnem = parts[0].lower()
-            args = [a.strip() for a in parts[1].split(",")] if len(parts) > 1 else []
+            args = _split_args(parts[1]) if len(parts) > 1 else []
             self.lines.append((mnem, args))
             pc += 2
         self.code_size = pc
@@ -142,7 +160,7 @@ class Assembler:
                 target = self.labels[inner] if inner in self.labels else int(inner, 0)
                 return 0xD000 | (n() << 8) | self._pcrel_disp(pc, target)
             return 0x6002 | (n() << 8) | (_reg(src) << 4)       # mov.l @rm,rn
-        if mnem == "mov.l" and args[1].startswith("@"):
+        if mnem == "mov.l" and args[1].startswith("@") and not args[1].startswith("@("):
             return 0x2002 | (_reg(args[1][1:]) << 8) | (_reg(args[0]) << 4)
         if mnem == "add" and args[0].startswith("#"):
             return 0x7000 | (n() << 8) | (_imm(args[0]) & 0xFF)
@@ -162,6 +180,16 @@ class Assembler:
             return 0x4008 | (n() << 8)
         if mnem == "ldc" and args[1].lower() == "sr":
             return 0x400E | (_reg(args[0]) << 8)
+        if mnem == "pref":
+            # pref @rn: flushes a store queue to the address its low bits and
+            # QACR select. The only way to feed the TA.
+            return 0x0083 | (_reg(args[0][1:]) << 8)
+        if mnem == "mov.l" and args[1].startswith("@(") and args[1].endswith(")"):
+            inner = args[1][2:-1].split(",")
+            disp = int(inner[0], 0)
+            if disp % 4 or not 0 <= disp // 4 <= 15:
+                raise AsmError(f"mov.l disp out of range: {disp}")
+            return 0x1000 | (_reg(inner[1]) << 8) | (_reg(args[0]) << 4) | (disp // 4)
         if mnem == "bra":
             return 0xA000 | self._branch_disp(pc, args[0], 12)
         if mnem == "bt":

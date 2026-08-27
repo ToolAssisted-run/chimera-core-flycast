@@ -53,6 +53,9 @@ defs = [
   # renderer that draws nothing, which is exactly M1. (Without it, and with
   # every GPU backend off, that factory's switch has an empty body and does not
   # compile - which is how this was found.)
+  # patches/0003 selects the software renderer this core supplies; NO_REND
+  # stays defined so nothing tries to build a GPU backend.
+  '-DCHIMERA_SOFTWARE_RENDERER',
   '-DNO_REND',
   '-DNO_NETWORK_LOGGER',   # patches/0001: the log listener that opens a socket
   # No recompilers, chosen the way upstream chooses them: FEAT_* are build-time
@@ -85,6 +88,7 @@ inc = include_directories(
   fc / 'core/deps/libelf/include',
   fc / 'core/deps/nowide/include',
   'waterbox',
+  'waterbox/refsw',
 )
 
 sources_sh = files('waterbox/sources.sh')
@@ -92,6 +96,15 @@ core_sources = files(run_command(sources_sh, 'main', check: true).stdout().strip
 dep_sources = files(run_command(sources_sh, 'deps', check: true).stdout().strip().split('\n'))
 
 deps_lib = static_library('flycast-deps', dep_sources, include_directories: inc)
+
+# refsw is vendored UNMODIFIED (BSD-3, see waterbox/refsw/license/bsd), so
+# everything it expects of its host arrives through a forced include rather
+# than through edits: the VRAM accessors Flycast spells differently, the
+# register fields Flycast leaves as plain u32, and libswirl's logging macros.
+refsw_lib = static_library('refsw',
+  files('waterbox/refsw/refsw_tile.cpp', 'waterbox/refsw/TexUtils.cpp'),
+  include_directories: inc,
+  cpp_args: ['-include', meson.current_source_dir() / 'waterbox/refsw/refsw-host.h'])
 
 # What a sandbox answers differently from a desktop. Each file says what it
 # refuses and why; none of them patch upstream.
@@ -101,6 +114,10 @@ driver_sources = files(
   'waterbox/stubs/host-stubs.cpp',
   'waterbox/stubs/vmem-stub.cpp',
   'waterbox/stubs/posix-stubs.cpp',
+  # the software renderer: skmp's reference rasteriser (BSD-3), and the walker
+  # that feeds it from Flycast's parsed lists
+  'waterbox/refsw-renderer.cpp',
+  'waterbox/refsw/bridge.cpp',
 )
 
 if meson.is_cross_build()
@@ -112,7 +129,7 @@ if meson.is_cross_build()
   executable('core', core_sources + driver_sources,
     name_suffix: 'wbx',
     include_directories: inc,
-    link_with: [deps_lib],
+    link_with: [deps_lib, refsw_lib],
     link_args: [
       '-static', '-no-pie',
       '-Wl,--eh-frame-hdr', '-Wl,-O2', '-Wl,--no-relax',
@@ -133,7 +150,7 @@ else
     include_directories: [include_directories('waterbox/native-shim'), inc],
     c_args: ['-I' + mb / 'source/guest/include', '-I' + mb / 'extern/jsmn'],
     cpp_args: ['-I' + mb / 'source/guest/include', '-I' + mb / 'extern/jsmn'],
-    link_with: [deps_lib],
+    link_with: [deps_lib, refsw_lib],
     dependencies: [threads, dl, m])
 
   mbhost = mb / 'build/meson-cpp/source/host'

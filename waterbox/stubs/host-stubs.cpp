@@ -53,7 +53,6 @@ void gui_set_mouse_button(int, bool, bool) {}
 void gui_set_mouse_wheel(float) {}
 void mainui_stop() {}
 void push_vmu_screen(int, int, u8 *) {}
-void getScaledFramebufferSize(const rend_context&, int& w, int& h) { w = 640; h = 480; }
 
 /* ---------------------------------------------------------------------------
  * Audio. The frontend takes samples from the ABI, not from a device: the

@@ -64,7 +64,10 @@ core_srcs() {
 	# rend/: everything that is not a GPU backend. TexCache and the sorter are
 	# machine-side (they decode PVR textures and sort the TA lists); norend is
 	# the renderer that draws nothing, which is what M1 runs.
-	for f in TexCache.cpp texconv.cpp sorter.cpp CustomTexture.cpp norend/norend.cpp; do
+	# transform_matrix.cpp is here for getScaledFramebufferSize: what size the
+	# picture actually is, from the tile clip and the scaler registers. It was a
+	# stub until the software renderer existed to care.
+	for f in TexCache.cpp texconv.cpp sorter.cpp CustomTexture.cpp transform_matrix.cpp norend/norend.cpp; do
 		echo "$fc/core/rend/$f"
 	done
 	# oslib is the host abstraction; the sandbox has no audio device, no HTTP

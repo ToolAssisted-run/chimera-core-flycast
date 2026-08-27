@@ -13,6 +13,11 @@ what makes this possible with no bios, no disc and no SH4 toolchain.
                of how many instructions the machine executed, so the
                equivalence gate compares the one thing that must never differ.
 
+  triangle.elf submits one polygon to the TA through the store queues and
+               triggers a render, which is what makes the software renderer
+               testable at all: without it the machine draws nothing and every
+               frame hashes the same.
+
   padread.elf  reads the controller over the maple bus every iteration and
                sums what it sees into RAM. That makes system RAM a function of
                the INPUT as well, which is what lets the gate prove input
@@ -126,7 +131,126 @@ wait:   mov.l   @r1,r2
         nop
 """
 
-PROGRAMS = {"counter.elf": COUNTER_ASM, "padread.elf": PADREAD_ASM}
+
+# A triangle, submitted the way a Dreamcast game submits one.
+#
+# Nothing about this is memory-mapped either: polygon and vertex parameters go
+# to the TA through the SH4's STORE QUEUES - 32 bytes staged at 0xE0000000 and
+# flushed with `pref`, landing at the address QACR0 selects, which here is the
+# TA's FIFO at 0x10000000. Then STARTRENDER, and the PVR draws what it was told.
+#
+# The blocks, in order:
+#   polygon    PCW 0x80000000 (opaque polygon, packed colour, untextured)
+#              ISP 0xE0000000 (depth compare: always), TSP, TCW
+#   vertex x3  PCW 0xE0000000, then x, y, 1/w, u, v, base colour, offset
+#              the last one is 0xF0000000: end of strip
+#   end        PCW 0x00000000: end of list
+#
+# The triangle is red, covers most of the screen, and sits at a constant depth,
+# so the picture it makes is a large flat shape - which is exactly what a gate
+# wants: obviously right or obviously wrong, and identical in both builds.
+def _sq_block(words):
+    """Stage 32 bytes in the store queue and flush them to the TA."""
+    out = []
+    for i, w in enumerate(words):
+        out.append(f"        mov.l   #{w:#010x},r2")
+        out.append(f"        mov.l   r2,@({i * 4},r3)")
+    out.append("        pref    @r3")
+    return "\n".join(out)
+
+
+F100 = 0x42C80000   # 100.0f
+F500 = 0x43FA0000   # 500.0f
+F300 = 0x43960000   # 300.0f
+F400 = 0x43C80000   # 400.0f
+FHALF = 0x3F000000  # 0.5f, the 1/w every vertex shares
+RED = 0xFFFF0000
+
+DRAW_ASM = PROLOGUE + """
+        ; the store queues point at the TA FIFO (0x10000000)
+        mov.l   #0xFF000038,r1
+        mov     #0x10,r2
+        mov.l   r2,@r1
+        mov.l   #0xFF00003C,r1
+        mov.l   r2,@r1
+
+        ; where the TA puts what it builds, and how much of the screen it covers
+        mov.l   #0xA05F8124,r1      ; TA_OL_BASE
+        mov.l   #0x00100000,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F812C,r1      ; TA_OL_LIMIT
+        mov.l   #0x00140000,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F8128,r1      ; TA_ISP_BASE
+        mov.l   #0x00200000,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F8130,r1      ; TA_ISP_LIMIT
+        mov.l   #0x00280000,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F813C,r1      ; TA_GLOB_TILE_CLIP: 20x15 tiles = 640x480
+        mov.l   #0x000E0013,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F8140,r1      ; TA_ALLOC_CTRL
+        mov.l   #0x00000001,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F8144,r1      ; TA_LIST_INIT
+        mov.l   #0x80000000,r2
+        mov.l   r2,@r1
+
+        ; The region array, at its own address - one entry, marked last. Its
+        ; opaque pointer must be the object-list base the TA was given, because
+        ; that address is how Flycast finds the display list this render is
+        ; for: a region array that says "no object lists" produces no context
+        ; and no picture, however much geometry the TA accepted.
+        mov.l   #0xA5180000,r1
+        mov.l   #0x80000000,r2      ; control: tile 0,0 and last region
+        mov.l   r2,@r1
+        mov.l   #0x00100000,r2      ; opaque: TA_OL_BASE
+        mov.l   r2,@(4,r1)
+        mov.l   #0x80000000,r2      ; the other three lists are empty
+        mov.l   r2,@(8,r1)
+        mov.l   r2,@(12,r1)
+        mov.l   r2,@(16,r1)
+
+        ; the display list itself
+        mov.l   #0xE0000000,r3
+""" + _sq_block([0x80000000, 0xE0000000, 0x20800000, 0, 0, 0, 0, 0]) + """
+""" + _sq_block([0xE0000000, F100, F100, FHALF, 0, 0, RED, 0]) + """
+""" + _sq_block([0xE0000000, F500, F100, FHALF, 0, 0, RED, 0]) + """
+""" + _sq_block([0xF0000000, F300, F400, FHALF, 0, 0, RED, 0]) + """
+""" + _sq_block([0, 0, 0, 0, 0, 0, 0, 0]) + """
+
+        ; where to render from and to, then go
+        mov.l   #0xA05F8020,r1      ; PARAM_BASE
+        mov.l   #0x00200000,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F802C,r1      ; REGION_BASE
+        mov.l   #0x00180000,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F8060,r1      ; FB_W_SOF1
+        mov.l   #0x00600000,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F804C,r1      ; FB_W_CTRL: 565
+        mov.l   #0x00000001,r2
+        mov.l   r2,@r1
+        mov.l   #0xA05F8014,r1      ; STARTRENDER
+        mov     #1,r2
+        mov.l   r2,@r1
+
+        ; and then wait, forever: one frame drawn is what this program is for
+done:   mov.l   #0x8C011000,r1
+        mov.l   @r1,r0
+        add     #1,r0
+        mov.l   r0,@r1
+        bra     done
+        nop
+"""
+
+PROGRAMS = {
+    "counter.elf": COUNTER_ASM,
+    "padread.elf": PADREAD_ASM,
+    "triangle.elf": DRAW_ASM,
+}
 
 EM_SH = 42
 ELF_HEADER_SIZE = 52

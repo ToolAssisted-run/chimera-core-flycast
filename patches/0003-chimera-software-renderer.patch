@@ -1,0 +1,27 @@
+diff --git a/core/hw/pvr/Renderer_if.cpp b/core/hw/pvr/Renderer_if.cpp
+index 6079cdc..2f004a9 100644
+--- a/core/hw/pvr/Renderer_if.cpp
++++ b/core/hw/pvr/Renderer_if.cpp
+@@ -399,6 +399,7 @@ static SwapIntervalDetector swapIntervalDetector;
+ Renderer* rend_GLES2();
+ Renderer* rend_GL4();
+ Renderer* rend_norend();
++Renderer* rend_refsw();
+ Renderer* rend_Vulkan();
+ Renderer* rend_OITVulkan();
+ Renderer* rend_DirectX9();
+@@ -407,7 +408,13 @@ Renderer* rend_OITDirectX11();
+ 
+ static void rend_create_renderer()
+ {
+-#ifdef NO_REND
++#if defined(CHIMERA_SOFTWARE_RENDERER)
++	/* chimera: a sandbox has no GPU, and Flycast has no software renderer of
++	 * its own. This build supplies one (skmp's reference rasteriser, see the
++	 * host's waterbox/refsw-renderer.cpp) and selects it here - the same place
++	 * upstream selects any other backend. */
++	renderer	 = rend_refsw();
++#elif defined(NO_REND)
+ 	renderer	 = rend_norend();
+ #else
+ 	switch (config::RendererType)

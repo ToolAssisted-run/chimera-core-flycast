@@ -40,6 +40,7 @@
 #include "hw/sh4/sh4_mem.h"
 #include "hw/aica/aica_if.h"
 #include "hw/pvr/pvr_mem.h"
+#include "hw/pvr/Renderer_if.h"
 
 /* ---------------------------------------------------------------------------
  * What the frontend sees. A Dreamcast frame is 640x480 at 59.94Hz; M1 hands
@@ -52,6 +53,8 @@
 
 static char g_loadError[512];
 static uint32_t g_video[DC_WIDTH * DC_HEIGHT];
+static int g_videoWidth = DC_WIDTH;
+static int g_videoHeight = DC_HEIGHT;
 static int16_t g_soundOut[MAX_SAMPLES * 2];
 static int g_nsamples;
 static int g_inputRead;
@@ -152,6 +155,17 @@ ECL_EXPORT int Init(void)
 		config::AutoLoadState = false;
 		config::AutoSaveState = false;
 
+		/* Bring the renderer up. On a desktop this is the graphics context's
+		 * job - whoever owns the window creates the device and then calls
+		 * this - and with no window nobody does, which leaves the renderer
+		 * pointer null and the first render a segfault inside Flycast. The
+		 * software renderer needs no device, so it is simply started here. */
+		if (!rend_init_renderer())
+		{
+			snprintf(g_loadError, sizeof(g_loadError), "the software renderer would not start");
+			return 0;
+		}
+
 		emu.start();
 	}
 	catch (const std::exception &e)
@@ -195,9 +209,24 @@ ECL_EXPORT void FrameAdvance(uint64_t packed)
 		emu.run();
 }
 
-ECL_EXPORT uint32_t *GetVideoBgra(void) { return g_video; }
-ECL_EXPORT int GetVideoWidth(void) { return DC_WIDTH; }
-ECL_EXPORT int GetVideoHeight(void) { return DC_HEIGHT; }
+/* The picture, from the software renderer (waterbox/refsw-renderer.cpp). A
+ * frame the machine never rendered leaves the last one standing, which is what
+ * the hardware does too: the video hardware keeps scanning out whatever is in
+ * the framebuffer. */
+extern "C" const uint32_t *chimera_refsw_frame(int *width, int *height);
+
+ECL_EXPORT uint32_t *GetVideoBgra(void)
+{
+	int w = 0, h = 0;
+	const uint32_t *frame = chimera_refsw_frame(&w, &h);
+	g_videoWidth = w;
+	g_videoHeight = h;
+	memcpy(g_video, frame, (size_t)w * h * sizeof(uint32_t));
+	return g_video;
+}
+
+ECL_EXPORT int GetVideoWidth(void) { return g_videoWidth; }
+ECL_EXPORT int GetVideoHeight(void) { return g_videoHeight; }
 
 ECL_EXPORT int16_t *GetAudio(void) { return g_soundOut; }
 ECL_EXPORT int GetAudioSampleCount(void) { return g_nsamples; }

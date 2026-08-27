@@ -111,8 +111,29 @@ Chimera's firmware channel once the machine runs.
   - Lag detection through patches/0002: the pad reader reports 0 lag frames,
     the counter (which never asks) reports every frame.
   - Domains: System RAM (16MB), VRAM (16MB), Sound RAM (8MB).
-- **M3 - the renderer.** Port refsw onto Flycast's TA context. Video digests
-  join the gate.
+- **M3 DONE** (2026-08-27): the Dreamcast draws. `waterbox/run-gate.sh`: 18/18,
+  including a rendered triangle that is checked by SHAPE (a red span of
+  100..499 at its base, narrowing below) rather than only by hash - because a
+  renderer that draws nothing passes an equivalence test perfectly.
+  - `waterbox/refsw/` is skmp's reference rasteriser, vendored BSD-3 and
+    otherwise unmodified: the ISP's depth and stencil, the TSP's texturing and
+    shading, the tile buffers.
+  - What had to change is WHERE TRIANGLES COME FROM. refsw reads the CORE
+    structures out of video memory, because that is what the hardware reads and
+    libswirl fed it with a low-level TA. Flycast's TA is high level: it parses
+    the TA FIFO into its own vertex lists and never writes CORE parameter
+    blocks to VRAM. So refsw's VRAM walker is unused, `waterbox/refsw-renderer.cpp`
+    walks Flycast's parsed lists instead, and ONE hook in refsw
+    (`chimera_fpu_entry`, weakly declared) answers its "decode this tag from
+    memory" with the triangle the host already has.
+  - The two projects agree on the structures that matter - refsw's Vertex and
+    Flycast's are the same fields in the same order, both descended from
+    reicast - so a triangle crosses the seam without conversion. Their headers
+    still cannot meet, since each defines all of them; `waterbox/refsw/bridge.h`
+    is that seam, with the layouts static_asserted on both sides.
+  - `tests/roms/triangle.elf` submits a polygon the way a game does: parameters
+    staged in a store queue and flushed to the TA's FIFO with `pref`, then
+    STARTRENDER.
 - **M4 - discs and firmware.** GD-ROM images (GDI/CDI/CHD) through the file
   slots, real BIOS through the firmware channel, VMU save data through the
   save-data channel.
@@ -123,6 +144,17 @@ Chimera's firmware channel once the machine runs.
 
 ## Sharp edges hit
 
+- **A region array that says "no object lists".** Flycast finds the display
+  list a render belongs to by reading the OPB pointer out of the region array
+  in VRAM and looking up the TA context stored under that address. A test
+  program whose region array marks every list empty submits geometry the TA
+  happily accepts, triggers a render, and gets nothing at all - no context, no
+  Process, no picture.
+- **Nobody starts the renderer.** `rend_init_renderer()` is called by whoever
+  owns the graphics context - the window, the D3D device, the GL surface. With
+  no window, nothing calls it, the renderer pointer stays null, and the first
+  render segfaults inside Flycast. A software renderer needs no device, so the
+  core starts it itself.
 - **The input global that does nothing.** `kcode[4]` in gamepad_device.h looks
   like where a frontend writes button state. It is not: it belongs to the
   desktop input layer, which reads real joysticks and then fills
@@ -166,6 +198,8 @@ Chimera's firmware channel once the machine runs.
 - **2026-08-27** Feasibility settled (this document). Repo created, upstream
   pinned at `c3763d8`. Headless CMake configure proven; the headless BUILD gets
   as far as the two findings above, which is the M1 starting line.
+- **2026-08-27** M3 done: a red triangle, drawn by software, identical in the
+  sandbox and out. Flycast can draw without a GPU for the first time.
 - **2026-08-27** M2 done: the machine reads its controller over the maple bus,
   lag detection works, and VRAM and sound RAM joined system RAM as domains.
 - **2026-08-27** M1 done: a Dreamcast runs inside the sandbox, byte-identical

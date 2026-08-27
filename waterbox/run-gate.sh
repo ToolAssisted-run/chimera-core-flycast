@@ -4,13 +4,11 @@
 # reference build (the same sources compiled natively), and must survive a
 # whole-machine savestate round-trip around every frame.
 #
-# SCOPE. The machine does not yet DRAW: Flycast has no software renderer, and
-# porting one is its own milestone (docs/PLAN.md). It runs this repository's own
-# SH4 programs rather than a game, because a Dreamcast game is somebody's
-# copyrighted disc. What is proven here is everything the picture will later
-# rest on: hundreds of millions of SH4 instructions, the AICA, the timers, the
-# memory system, and the maple bus carrying a frontend's input to the machine -
-# identical inside the sandbox and out.
+# SCOPE. It runs this repository's own SH4 programs rather than a game, because
+# a Dreamcast game is somebody's copyrighted disc. Between them they exercise
+# what a movie depends on: hundreds of millions of SH4 instructions, the AICA,
+# the timers, the memory system, the maple bus carrying a frontend's input, and
+# - since the software renderer landed - the PVR actually drawing.
 #
 # Usage: ./run-gate.sh [-n <native build dir>] [-g <guest build dir>]
 set -u
@@ -47,6 +45,7 @@ tests=(
 	"counter counter.elf 300"
 	"counterShort counter.elf 60"
 	"padread padread.elf 120"
+	"triangle triangle.elf 30"
 )
 
 for t in "${tests[@]}"; do
@@ -131,6 +130,54 @@ if [ -d "$wd" ]; then
 		report "domains" PASS "System RAM, VRAM and Sound RAM exposed"
 	else
 		report "domains" FAIL "$doms domains, want 3"
+	fi
+fi
+
+# ---- the picture ----------------------------------------------------------
+# triangle.elf submits one polygon to the TA through the store queues and
+# triggers a render, so the frame it produces is a large flat shape rather than
+# the blank one every other program leaves. Both halves of this matter: a
+# renderer that draws nothing passes an equivalence test perfectly.
+wd="$work/triangle"
+if [ -d "$wd" ]; then
+	blank="$("$nat/run-native" "$work/counter" --frames 5 2>/dev/null | sed -n 's/^videoHash=//p')"
+	drawn="$("$nat/run-native" "$wd" --frames 5 2>/dev/null | sed -n 's/^videoHash=//p')"
+	boxdrawn="$("$nat/run-wbx" "$gst/core.wbx" "$wd" --frames 5 2>/dev/null | sed -n 's/^videoHash=//p')"
+	if [ "$blank" = "$drawn" ]; then
+		report "render:drew" FAIL "a rendered frame hashes the same as a blank one"
+	elif [ "$drawn" != "$boxdrawn" ]; then
+		report "render:drew" FAIL "native and sandbox drew different pictures"
+	else
+		report "render:drew" PASS "the PVR drew, and the sandbox drew the same"
+	fi
+
+	# What was drawn, not just that something was: the triangle covers a known
+	# span of a known colour, so a renderer that fills the screen or draws the
+	# wrong shape is caught rather than congratulated.
+	shot="$work/triangle.tga"
+	"$nat/run-native" "$wd" --frames 5 --screenshot "$shot" >/dev/null 2>&1
+	shape="$(python3 - "$shot" <<'PYSHAPE'
+import struct, sys
+d = open(sys.argv[1], "rb").read()
+w, h = struct.unpack("<HH", d[12:16])
+px = d[18:]
+def span(y):
+    xs = [x for x in range(w) if px[(y * w + x) * 4:(y * w + x) * 4 + 3].hex() == "ff0000"]
+    return (min(xs), max(xs)) if xs else None
+top, lower = span(100), span(200)
+red = sum(1 for i in range(0, w * h * 4, 4) if px[i:i + 3].hex() == "ff0000")
+# a triangle with its base at y=100 and its apex below: wide at the top,
+# narrower lower down, and neither empty nor the whole screen
+ok = (top == (100, 499) and lower is not None
+      and (lower[1] - lower[0]) < (top[1] - top[0])
+      and 20000 < red < w * h // 2)
+print("ok" if ok else f"bad top={top} lower={lower} red={red}")
+PYSHAPE
+)"
+	if [ "$shape" = "ok" ]; then
+		report "render:shape" PASS "a red triangle, 100..499 at its base, narrowing below"
+	else
+		report "render:shape" FAIL "$shape"
 	fi
 fi
 
