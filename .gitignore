@@ -1,0 +1,6 @@
+# Meson build trees: the guest cross file and both build dirs are machine-local
+build/
+
+# Commercial discs never enter this repository; the gate's own images live in
+# tests/roms and are free to distribute.
+tests/roms-local/

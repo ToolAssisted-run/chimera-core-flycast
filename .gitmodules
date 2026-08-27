@@ -1,0 +1,3 @@
+[submodule "extern/flycast"]
+	path = extern/flycast
+	url = https://github.com/flyinghead/flycast.git
