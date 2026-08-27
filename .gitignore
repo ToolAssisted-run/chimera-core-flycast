@@ -1,9 +1,13 @@
 # Meson build trees: the guest cross file and both build dirs are machine-local
 build/
 
-# Commercial discs never enter this repository; the gate's own images live in
-# tests/roms and are free to distribute.
+# Commercial discs and copyrighted firmware never enter this repository; the
+# gate's own disc and programs live in tests/roms and are free to distribute.
+# Anything supplied for local testing goes here instead:
+#   tests/roms-local/       real discs (.gdi/.cdi/.chd) and NAOMI romsets
+#   tests/firmware-local/   dc_boot.bin, dc_flash.bin, naomi.zip
 tests/roms-local/
+tests/firmware-local/
 
 # the sandbox writes this when a guest faults
 minibox-diag.log
