@@ -163,8 +163,27 @@ Chimera's firmware channel once the machine runs.
     every declared entry that applies is required, and variants are separate
     entries selected by a setting. "hle" and "real" are different machines and
     do not share movies.
-- **M6 - beyond Dreamcast.** NAOMI and Atomiswave as additional machines in one
-  package, the way gpgx serves four systems.
+- **M6 - beyond Dreamcast: NOT SHIPPED, and here is why.** NAOMI and Atomiswave
+  were to become additional machines in this package, the way gpgx serves four
+  systems. The code is already here - `hw/naomi` is in the curated source set,
+  and the frontend's machines feature is proven by gpgx - but the milestone
+  cannot be PROVEN here, and this repository does not ship claims it cannot
+  gate.
+  What stands in the way is content, not code:
+  - a NAOMI cartridge is identified by its FILENAME matching an entry in
+    Flycast's own romset table (`FindGame` over `naomi_roms.cpp`), and each
+    entry names the exact roms and their CRCs. A synthetic cart - the trick
+    that gave this core its Dreamcast disc - cannot be made to boot, because
+    an unknown name is not a game.
+  - every NAOMI machine also needs its bios (`naomi.zip`), which is
+    copyrighted, as is every romset.
+  - romsets are zip archives, and this core answers `OpenArchive` with "not an
+    archive" (waterbox/stubs/archive-stub.cpp): supporting them means bringing
+    libzip and the 7z sdk back into a build that dropped a hundred translation
+    units to be rid of them.
+  So the honest order is: someone with a legally dumped romset and bios adds
+  the machines, and the gate they add proves it. Until then the package
+  declares one machine, and that machine works.
 
 ## Sharp edges hit
 
@@ -274,6 +293,23 @@ Chimera's firmware channel once the machine runs.
 - **zlib's CMake renames a tracked header.** Running Flycast's own CMake in the
   same checkout moves `zconf.h` to `zconf.h.included`, and every later build
   fails to find it. Restore it with git if a stray configure has been run.
+
+## What remains
+
+- **NAOMI and Atomiswave**, as above: content-gated, not code-gated.
+- **Textures.** refsw decodes them (TexUtils.cpp is vendored and compiled), and
+  nothing in the gate draws a textured polygon yet - the test program submits
+  flat-shaded geometry. A real game is the test that matters here.
+- **The recompilers.** The SH4, the ARM7 and the AICA's DSP all interpret. A
+  JIT can live in a sandbox (PPSSPP's does), and it would be worth the work if
+  a real game turns out to be too slow to be playable, which is the open
+  question a real game would answer.
+- **Speed, unmeasured.** A reference rasteriser and three interpreters is the
+  slowest possible arrangement. Nothing here has run a real game, so nobody
+  knows what it costs.
+- **A movie.** Every gate in this repository replays inputs; none of them is a
+  recorded run through the frontend, because the frontend's movie support wants
+  a game worth recording.
 
 ## Log
 
