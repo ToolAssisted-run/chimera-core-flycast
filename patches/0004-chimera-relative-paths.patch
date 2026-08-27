@@ -1,0 +1,33 @@
+diff --git a/core/oslib/storage.cpp b/core/oslib/storage.cpp
+index b61fc0f..ba760ad 100644
+--- a/core/oslib/storage.cpp
++++ b/core/oslib/storage.cpp
+@@ -177,7 +177,10 @@ public:
+ 			return "/";
+ #endif
+ 		if (lastSlash == std::string::npos)
+-			return "." + native_separator;
++			// chimera: "" rather than "./" - they mean the same directory, and
++			// joining the second onto a filename produces "./name", which a
++			// sandbox serving exactly the files it was given does not have.
++			return "";
+ 		std::string parentPath = path.substr(0, lastSlash);
+ #ifdef _WIN32
+ 		if (parentPath.size() == 2 && std::isalpha(static_cast<u8>(parentPath[0])) && parentPath[1] == ':')
+@@ -192,6 +195,16 @@ public:
+ 	std::string getSubPath(const std::string& reference, const std::string& subpath) override
+ 	{
+ 		// FIXME this is incorrect if reference isn't a directory
++		//
++		// chimera: and it doubled the separator when the reference already
++		// ended with one - getParentPath returns "./" for a bare filename, so
++		// a .gdi in the current directory asked for ".//track01.bin". Every
++		// desktop file system shrugs that off; a sandbox that serves exactly
++		// the files it was given does not.
++		if (reference.empty())
++			return subpath;
++		if (native_separator.find(reference.back()) != std::string::npos)
++			return reference + subpath;
+ 		return reference + native_separator + subpath;
+ 	}
+ 

@@ -1,0 +1,61 @@
+diff --git a/core/hw/aica/aica_if.cpp b/core/hw/aica/aica_if.cpp
+index 92bfa83..bcaca4d 100644
+--- a/core/hw/aica/aica_if.cpp
++++ b/core/hw/aica/aica_if.cpp
+@@ -34,8 +34,20 @@ int dma_sched_id = -1;
+ static u32 RealTimeClock;
+ int rtc_schid = -1;
+ 
++/* chimera: a machine whose clock is the wall clock is a DIFFERENT MACHINE
++ * every time it is powered on, and a movie recorded on one does not replay on
++ * another - the Dreamcast writes the time into RAM at boot, and the bios and
++ * games read it. A host that needs the machine to be a function of its project
++ * pins the time here; weakly declared, so everyone else keeps the clock. */
++extern "C" int chimera_pinned_rtc(u32 *rtc) __attribute__((weak));
++extern "C" int chimera_pinned_rtc(u32 *rtc) { (void)rtc; return 0; }
++
+ u32 GetRTC_now()
+ {
++	u32 pinned = 0;
++	if (chimera_pinned_rtc(&pinned))
++		return pinned;
++
+ 	// rtc kept static for netplay when savestate is not loaded
+ 	if (config::GGPOEnable)
+ 		// 1/1/70 00:00:00
+diff --git a/core/hw/flashrom/nvmem.cpp b/core/hw/flashrom/nvmem.cpp
+index ee522b8..abc32fc 100644
+--- a/core/hw/flashrom/nvmem.cpp
++++ b/core/hw/flashrom/nvmem.cpp
+@@ -28,6 +28,10 @@ extern bool bios_loaded;
+ 
+ namespace nvmem
+ {
++/* chimera: 1 and six bytes written when the host pins the console ID. */
++extern "C" int chimera_pinned_console_id(u8 id[6]) __attribute__((weak));
++extern "C" int chimera_pinned_console_id(u8 id[6]) { (void)id; return 0; }
++
+ 
+ static MemChip *sys_rom;
+ static WritableChip *sys_nvmem;
+@@ -199,11 +203,19 @@ static void fixUpDCFlash()
+ 	u8 *console_id = &sys_nvmem->data[0x1A058];
+ 	if (!memcmp(console_id, "\377\377\377\377\377\377", 6))
+ 	{
++		/* chimera: rand() is the C library's, and two C libraries do not
++		 * agree on it - the same seed gives one sequence under glibc and
++		 * another under musl, so the same machine came up with a different
++		 * console ID inside the sandbox than outside it. A host that needs the
++		 * machine to be a function of its project supplies these six bytes;
++		 * weakly declared, so everyone else keeps the random ones. */
++		u8 pinnedId[6];
++		const bool pinned = chimera_pinned_console_id(pinnedId) != 0;
+ 		srand(now);
+ 		u8 sum = 0;
+ 		for (int i = 0; i < 6; i++)
+ 		{
+-			console_id[i] = rand();
++			console_id[i] = pinned ? pinnedId[i] : (u8)rand();
+ 			console_id[i + 0xA0] = console_id[i];	// copy at 1A0F8
+ 			sum += console_id[i];
+ 		}

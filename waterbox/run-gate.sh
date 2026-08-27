@@ -181,6 +181,65 @@ PYSHAPE
 	fi
 fi
 
+# ---- the disc --------------------------------------------------------------
+# A GD-ROM this repository builds from scratch (tests/make-testdisc.py): three
+# tracks, an ISO9660 filesystem at LBA 45000, an IP.BIN bootstrap naming
+# 1ST_READ.BIN. Booting it exercises the path a real game takes - the disc
+# reader, the drive, the HLE bios locating the bootfile - none of which the ELF
+# shortcut touches.
+discdir="$work/disc"
+if python3 "$root/tests/make-testdisc.py" "$discdir" "$root/tests/roms/counter.bin" >/dev/null 2>&1; then
+	printf '{"disc":["gate.gdi"]}' > "$discdir/slots"
+	printf '{}' > "$discdir/settings"
+
+	if ! "$nat/run-native" "$discdir" --frames 30 --dump-domain "System RAM" "$work/disc.ram" 2>"$work/disc.err" | digests > "$work/disc.nat"; then
+		report "disc:boots" FAIL "native runner error: $(head -1 "$work/disc.err")"
+	elif ! python3 -c "
+import struct, sys
+d = open('$work/disc.ram','rb').read()
+# the program the disc holds counts into 0x8C011000, and the bios loads it to
+# 0x8C010000: both must be true, or something else was running
+counter = struct.unpack('<I', d[0x11000:0x11004])[0]
+loaded = d[0x10000:0x10002] == bytes.fromhex('03d0')
+sys.exit(0 if counter > 1000 and loaded else 1)
+"; then
+		report "disc:boots" FAIL "the disc's program did not run"
+	else
+		report "disc:boots" PASS "booted 1ST_READ.BIN from a GD-ROM filesystem"
+	fi
+
+	if "$nat/run-wbx" "$gst/core.wbx" "$discdir" --frames 30 2>/dev/null | digests > "$work/disc.box" \
+		&& cmp -s "$work/disc.nat" "$work/disc.box"; then
+		report "disc:equivalence" PASS "30 frames from the disc, native == waterboxed"
+	else
+		report "disc:equivalence" FAIL "$(diff "$work/disc.nat" "$work/disc.box" 2>/dev/null | tr '\n' ' ' | head -c 100)"
+	fi
+
+	# ---- the memory cards --------------------------------------------------
+	# A Dreamcast saves to a VMU, which Flycast keeps in a file next to itself.
+	# A sandbox has nowhere to put one, so patches/0002 hands the flash to the
+	# host and it leaves through the save-data channel - formatted, because a
+	# blank 128KB of flash is not a memory card a game can write to.
+	sd="$work/savedata"
+	mkdir -p "$sd"
+	"$nat/run-native" "$discdir" --frames 10 --savedata-out "$sd" >/dev/null 2>&1
+	if python3 -c "
+import sys, glob
+files = sorted(glob.glob('$sd/vmu_*.bin'))
+if not files:
+    sys.exit(1)
+for path in files:
+    d = open(path,'rb').read()
+    if len(d) != 128 * 1024 or d[0x1FE00:0x1FE10] != bytes([0x55]) * 16:
+        sys.exit(1)
+sys.exit(0)
+"; then
+		report "savedata:vmu" PASS "$(ls "$sd" | wc -l) formatted memory cards exported"
+	else
+		report "savedata:vmu" FAIL "no formatted VMU came out of the save-data channel"
+	fi
+fi
+
 # The Stella lesson: the native reference is the only place a real clock and
 # real threads still tick, so it is where nondeterminism shows up. Two runs of
 # the same program must agree.

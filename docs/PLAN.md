@@ -134,15 +134,41 @@ Chimera's firmware channel once the machine runs.
   - `tests/roms/triangle.elf` submits a polygon the way a game does: parameters
     staged in a store queue and flushed to the TA's FIFO with `pref`, then
     STARTRENDER.
-- **M4 - discs and firmware.** GD-ROM images (GDI/CDI/CHD) through the file
-  slots, real BIOS through the firmware channel, VMU save data through the
-  save-data channel.
+- **M4 DONE** (2026-08-27): discs, memory cards and firmware.
+  `waterbox/run-gate.sh`: 21/21.
+  - `tests/make-testdisc.py` builds a GD-ROM from scratch - three tracks, an
+    ISO9660 filesystem at LBA 45000, an IP.BIN bootstrap naming 1ST_READ.BIN -
+    so the gate boots the way a game does (disc reader, drive, HLE bios
+    locating the bootfile) without anyone's copyrighted disc.
+  - The VMU's 128KB of flash leaves through the save-data channel, formatted:
+    two cards, in the two slots of the controller in port A.
+  - Firmware: the core looks for `dc_boot.bin` where the frontend mounts it and
+    falls back to the HLE bios when a project has none. UNTESTED in the
+    positive direction - a real bios is copyrighted and this repository has
+    none - so what is proven is that its absence is handled.
 - **M5 - the frontend leg.** The package inside Chimera: settings, keybinds,
   the file wizard.
 - **M6 - beyond Dreamcast.** NAOMI and Atomiswave as additional machines in one
   package, the way gpgx serves four systems.
 
 ## Sharp edges hit
+
+- **The machine took its identity from the host.** Two of them, both caught by
+  the gate as a handful of RAM bytes differing while the program's own counter
+  matched exactly:
+  - the real-time clock. A Dreamcast writes the time into RAM at boot and the
+    bios and games read it, so a machine seeded from the wall clock is a
+    different machine every run. patches/0005 lets the project pin it.
+  - the CONSOLE ID, six bytes in flash that some games read. Upstream fills
+    them with the C library's `rand()`, seeded from that same clock - and glibc
+    and musl do not agree on `rand()`, so the same seed gave one console
+    outside the sandbox and another inside it. The core derives those bytes
+    itself now, with arithmetic it owns, so both flavors reach the same
+    machine.
+- **A path that every desktop shrugs off.** `getParentPath` returns `"./"` for a
+  bare filename and `getSubPath` glued a separator onto it, so a `.gdi` in the
+  working directory asked for `.//track01.bin`. A real file system normalises
+  that away; a sandbox serving exactly the files it was given does not.
 
 - **A region array that says "no object lists".** Flycast finds the display
   list a render belongs to by reading the OPB pointer out of the region array
@@ -198,6 +224,9 @@ Chimera's firmware channel once the machine runs.
 - **2026-08-27** Feasibility settled (this document). Repo created, upstream
   pinned at `c3763d8`. Headless CMake configure proven; the headless BUILD gets
   as far as the two findings above, which is the M1 starting line.
+- **2026-08-27** M4 done: a GD-ROM this repository builds from scratch boots
+  through the HLE bios, memory cards leave through the save-data channel, and
+  the machine stopped taking its identity from the host.
 - **2026-08-27** M3 done: a red triangle, drawn by software, identical in the
   sandbox and out. Flycast can draw without a GPU for the first time.
 - **2026-08-27** M2 done: the machine reads its controller over the maple bus,

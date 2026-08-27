@@ -309,6 +309,12 @@ def main() -> None:
         path = os.path.join(outdir, name)
         with open(path, "wb") as f:
             f.write(build(code))
+        # The same code as a raw binary, which is what a DISC holds: the HLE
+        # bios loads 1ST_READ.BIN to 0x8C010000 and jumps to it, with no ELF
+        # header to read. tests/make-testdisc.py takes one of these.
+        raw = os.path.join(outdir, name.replace(".elf", ".bin"))
+        with open(raw, "wb") as f:
+            f.write(code)
         print(f"{path}: {len(code)} bytes of SH4 at {LOAD_ADDR:#x}")
 
 

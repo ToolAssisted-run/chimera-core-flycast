@@ -41,6 +41,7 @@
 #include "hw/aica/aica_if.h"
 #include "hw/pvr/pvr_mem.h"
 #include "hw/pvr/Renderer_if.h"
+#include "stdclass.h"
 
 /* ---------------------------------------------------------------------------
  * What the frontend sees. A Dreamcast frame is 640x480 at 59.94Hz; M1 hands
@@ -115,6 +116,58 @@ static void ApplyInput()
 }
 
 /* ---------------------------------------------------------------------------
+ * THE MACHINE IS A FUNCTION OF THE PROJECT, not of the moment.
+ *
+ * A Dreamcast has a battery-backed clock, and Flycast reads the host's: the
+ * time goes into RAM at boot, where the bios and games read it. Two runs of the
+ * same movie would then start from two different machines - which the
+ * equivalence gate saw immediately as twelve bytes of RAM differing between
+ * native and sandbox while every other byte, and the program's own counter,
+ * matched exactly.
+ *
+ * So the clock comes from the project. The default is the Dreamcast's own
+ * epoch (1 January 1950), because a machine that always wakes at the same
+ * moment is the point; a project that wants a particular date sets one.
+ */
+static uint32_t g_rtc;
+
+extern "C" int chimera_pinned_rtc(uint32_t *rtc)
+{
+	if (rtc) *rtc = g_rtc;
+	return 1;
+}
+
+/* The console's own identity, which some games read (and one of them, ChuChu
+ * Rocket, uses on a network). Upstream generates it with the C library's rand()
+ * seeded from the clock - and glibc and musl do not agree on rand(), so the
+ * sandboxed machine came up with a different console than the native one. It
+ * is derived from the pinned clock instead, by arithmetic this core does
+ * itself, so both flavors reach the same six bytes. */
+extern "C" int chimera_pinned_console_id(uint8_t id[6])
+{
+	uint32_t x = g_rtc ^ 0x5DEECE66u;
+	for (int i = 0; i < 6; i++)
+	{
+		x = x * 1103515245u + 12345u;
+		id[i] = (uint8_t)(x >> 16);
+	}
+	return 1;
+}
+
+/* Whether the project supplied a real bios. The frontend mounts firmware by
+ * the name the package declares (see waterbox.config), so its presence is the
+ * question, and the answer decides between the machine's own bios and the HLE
+ * one. */
+static bool FirmwarePresent()
+{
+	FILE *f = fopen("dc_boot.bin", "rb");
+	if (f == nullptr)
+		return false;
+	fclose(f);
+	return true;
+}
+
+/* ---------------------------------------------------------------------------
  * the chimera guest ABI is a C ABI: the adapter looks these up by name
  */
 extern "C" {
@@ -130,6 +183,18 @@ ECL_EXPORT int Init(void)
 	const char *file = "disc";
 	if (wbx_slot_count("disc") > 0 && wbx_slot_name("disc", 0, name, sizeof(name)) != nullptr)
 		file = name;
+
+	/* Where Flycast looks for the things a machine is made of. The sandbox
+	 * mounts whatever the project supplies at the root of the guest's file
+	 * system, so that is the only place to look - and the only place that
+	 * exists. A real bios (dc_boot.bin, dc_flash.bin) arrives through
+	 * Chimera's firmware channel; when the project has none, the HLE bios in
+	 * core/reios runs instead, which is what every gate here uses. */
+	g_rtc = (uint32_t)wbx_setting_long("rtc", 0);
+
+	set_user_data_dir("./");
+	add_system_data_dir("./");
+	config::UseReios = !FirmwarePresent();
 
 	try
 	{
@@ -154,6 +219,16 @@ ECL_EXPORT int Init(void)
 		config::DynarecEnabled = false;
 		config::AutoLoadState = false;
 		config::AutoSaveState = false;
+
+		/* One controller in port A with a memory card in its first slot: the
+		 * machine a movie assumes unless a project says otherwise. The VMU is
+		 * part of that machine, so the frontend gets its contents through the
+		 * save-data channel rather than the core keeping a file somewhere. */
+		config::MapleMainDevices[0] = MDT_SegaController;
+		config::MapleExpansionDevices[0][0] = MDT_SegaVMU;
+		config::MapleExpansionDevices[0][1] = MDT_None;
+		for (int port = 1; port < 4; port++)
+			config::MapleMainDevices[port] = MDT_None;
 
 		/* Bring the renderer up. On a desktop this is the graphics context's
 		 * job - whoever owns the window creates the device and then calls
@@ -285,10 +360,55 @@ ECL_EXPORT int GetMemoryDomainWritable(int which)
 	return (which >= 0 && which < DOMAIN_COUNT) ? 1 : 0;
 }
 
-/* M1 saves nothing: the VMU is a later milestone (docs/PLAN.md). */
-ECL_EXPORT int32_t GetSaveDataFileCount(void) { return 0; }
-ECL_EXPORT const char *GetSaveDataFileName(int32_t i) { (void)i; return nullptr; }
-ECL_EXPORT int64_t GetSaveDataFileSize(int32_t i) { (void)i; return 0; }
-ECL_EXPORT const uint8_t *GetSaveDataFileBuffer(int32_t i) { (void)i; return nullptr; }
+/* ---------------------------------------------------------------------------
+ * Save data: the memory cards.
+ *
+ * A Dreamcast keeps saves on a VMU, which is a 128KB flash chip inside the
+ * controller - and on a desktop Flycast keeps that in a file next to the
+ * emulator. A sandboxed core has nowhere to put a file, and a movie that
+ * depends on a save nobody can see is not reproducible, so patches/0002 hands
+ * the flash over here instead and it travels through Chimera's save-data
+ * channel like any other persistent data.
+ */
+#define MAX_VMUS 4
+
+static struct {
+	char name[32];
+	uint8_t *flash;
+	unsigned size;
+} g_vmus[MAX_VMUS];
+static int g_vmuCount;
+
+} /* extern "C" */
+
+extern "C" bool chimera_register_vmu(const char *port, uint8_t *flash, unsigned size)
+{
+	if (g_vmuCount >= MAX_VMUS)
+		return false;
+	snprintf(g_vmus[g_vmuCount].name, sizeof(g_vmus[g_vmuCount].name), "vmu_%s.bin", port);
+	g_vmus[g_vmuCount].flash = flash;
+	g_vmus[g_vmuCount].size = size;
+	g_vmuCount++;
+	return true;
+}
+
+extern "C" {
+
+ECL_EXPORT int32_t GetSaveDataFileCount(void) { return g_vmuCount; }
+
+ECL_EXPORT const char *GetSaveDataFileName(int32_t i)
+{
+	return (i >= 0 && i < g_vmuCount) ? g_vmus[i].name : nullptr;
+}
+
+ECL_EXPORT int64_t GetSaveDataFileSize(int32_t i)
+{
+	return (i >= 0 && i < g_vmuCount) ? g_vmus[i].size : 0;
+}
+
+ECL_EXPORT const uint8_t *GetSaveDataFileBuffer(int32_t i)
+{
+	return (i >= 0 && i < g_vmuCount) ? g_vmus[i].flash : nullptr;
+}
 
 } /* extern "C" */

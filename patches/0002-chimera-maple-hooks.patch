@@ -1,0 +1,79 @@
+diff --git a/core/hw/maple/maple_devs.cpp b/core/hw/maple/maple_devs.cpp
+index 9402444..c25e9b1 100755
+--- a/core/hw/maple/maple_devs.cpp
++++ b/core/hw/maple/maple_devs.cpp
+@@ -1,4 +1,11 @@
+ #include "maple_devs.h"
++
++/* chimera: the machine asking its controller what it is doing is what a lag
++ * frame IS - a frame in which this is never called polled no input. A host
++ * that wants to know defines this; weakly declared, so a build without one is
++ * unchanged. */
++extern "C" void chimera_input_was_read() __attribute__((weak));
++extern "C" void chimera_input_was_read() {}
+ #include "maple_cfg.h"
+ #include "maple_helper.h"
+ #include "maple_if.h"
+@@ -184,6 +191,7 @@ struct maple_sega_controller: maple_base
+ 			//controller condition
+ 		case MDCF_GetCondition:
+ 			{
++				chimera_input_was_read();
+ 				PlainJoystickState pjs;
+ 				config->GetInput(&pjs);
+ 				//caps
+@@ -347,6 +355,15 @@ u8 vmu_default[] = {
+ 		0x77,0x19,0x06,0xef,
+ };
+ 
++/* chimera: true when the host took responsibility for this VMU's contents.
++ * Weakly declared, so a build without a host keeps reading and writing files. */
++extern "C" bool chimera_register_vmu(const char *port, u8 *flash, unsigned size) __attribute__((weak));
++extern "C" bool chimera_register_vmu(const char *port, u8 *flash, unsigned size)
++{
++	(void)port; (void)flash; (void)size;
++	return false;
++}
++
+ struct maple_sega_vmu: maple_base
+ {
+ 	FILE *file = nullptr;
+@@ -432,11 +449,22 @@ struct maple_sega_vmu: maple_base
+ 	{
+ 		memset(flash_data, 0, sizeof(flash_data));
+ 		memset(lcd_data, 0, sizeof(lcd_data));
++		/* chimera: a sandboxed core has no directory to keep memory cards in.
++		 * The host is told where this VMU's flash lives and carries it through
++		 * its own save-data channel instead - which is also what makes a
++		 * memory card part of a movie rather than of the machine it ran on.
++		 *
++		 * A host that answers takes over the FILES only: the card is still
++		 * formatted below exactly as upstream formats a new one, because a
++		 * blank 128KB of flash is not a memory card a game can write to.
++		 */
++		const bool chimeraOwnsSaves = chimera_register_vmu(logical_port, flash_data, sizeof(flash_data));
+ 
+         // Load existing vmu file if found
+         std::string rpath = hostfs::getVmuPath(logical_port, false);
++        if (chimeraOwnsSaves) rpath.clear();
+         // this might be a storage url
+-        hostfs::File *rfile = hostfs::storage().openFile(rpath, "rb");
++        hostfs::File *rfile = chimeraOwnsSaves ? nullptr : hostfs::storage().openFile(rpath, "rb");
+         if (rfile == nullptr) {
+             INFO_LOG(MAPLE, "Unable to open VMU file \"%s\", creating new file", rpath.c_str());
+         }
+@@ -448,11 +476,11 @@ struct maple_sega_vmu: maple_base
+         }
+         // Open or create the vmu file to save to
+         std::string wpath = hostfs::getVmuPath(logical_port, true);
+-        file = nowide::fopen(wpath.c_str(), "rb+");
++        file = chimeraOwnsSaves ? nullptr : nowide::fopen(wpath.c_str(), "rb+");
+         if (file == nullptr)
+         {
+-            file = nowide::fopen(wpath.c_str(), "wb+");
+-			if (file == nullptr) {
++            file = chimeraOwnsSaves ? nullptr : nowide::fopen(wpath.c_str(), "wb+");
++			if (file == nullptr && !chimeraOwnsSaves) {
+                 ERROR_LOG(MAPLE, "Failed to create VMU save file \"%s\"", wpath.c_str());
+ 			}
+ 			else if (rfile != nullptr)
