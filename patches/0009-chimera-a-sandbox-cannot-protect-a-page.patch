@@ -1,5 +1,5 @@
 diff --git a/core/hw/pvr/pvr_mem.cpp b/core/hw/pvr/pvr_mem.cpp
-index 4b809d6..8688e03 100644
+index 4b809d6..9b8f784 100644
 --- a/core/hw/pvr/pvr_mem.cpp
 +++ b/core/hw/pvr/pvr_mem.cpp
 @@ -5,6 +5,29 @@
@@ -56,7 +56,58 @@ index 4b809d6..8688e03 100644
  			SQBuffer *dest = (SQBuffer *)&vram[address_w & VRAM_MASK];
  			*dest = *sq;
  		}
-@@ -324,9 +350,14 @@ void DYNACALL pvr_write_area4(u32 addr, T data)
+@@ -299,10 +325,49 @@ static u32 pvr_map32(u32 offset32)
+ 	rv |= (offset32 & offset_bits) * 2;
+ 
+ 	rv |= bank * 4;
+-	
++
+ 	return rv;
+ }
+ 
++#ifdef CHIMERA_NO_PAGE_PROTECTION
++// The same news as chimera_vram_written, for a whole range at once.
++//
++// Every DMA into vram - the PVR-DMA, and the ch2-DMA direct texture path a
++// game uses to stream sprites - ends in a memcpy inside
++// WriteMemBlock_nommu_*. No handler runs, so the per-write hook never fires
++// and the texture cache goes on showing what used to be there. Under a page
++// protection that memcpy faults like anything else, which is why upstream
++// has nothing here to copy.
++static void chimera_invalidate_pages(u32 offset, u32 size)
++{
++	if (offset >= VRAM_SIZE)
++		return;
++	if (size > VRAM_SIZE - offset)
++		size = VRAM_SIZE - offset;
++
++	for (u32 page = offset & ~(PAGE_SIZE - 1); page < offset + size; page += PAGE_SIZE)
++		if (VramLockedPage(page))
++			VramLockedWriteOffset(page);
++}
++
++void chimera_vram_written_range(u32 addr, u32 size)
++{
++	u32 paddr = addr & 0x1FFFFFFF;
++	if (((paddr >> 26) & 7) != 1 || size == 0)	// area 1 is vram, and only it
++		return;
++
++	// Both windows onto vram are in reach here, and which one a write takes
++	// depends on SB_LMMODE as well as the address, so cover both readings:
++	// invalidating a page that did not change costs one texture upload,
++	// missing one costs the picture.
++	chimera_invalidate_pages(paddr & VRAM_MASK, size);
++	if ((paddr & 0x01000000) == 0)
++		// The 64-bit window interleaves the two banks every 32 bits, so a
++		// range of it covers twice as much vram, starting where it maps.
++		chimera_invalidate_pages(pvr_map32(paddr & VRAM_MASK), size * 2);
++}
++#endif
++
+ template<typename T, bool upper>
+ T DYNACALL pvr_read_area4(u32 addr)
+ {
+@@ -324,9 +389,14 @@ void DYNACALL pvr_write_area4(u32 addr, T data)
  {
  	bool access32 = (upper ? SB_LMMODE1 : SB_LMMODE0) == 1;
  	if (access32)
@@ -71,6 +122,46 @@ index 4b809d6..8688e03 100644
  }
  template void pvr_write_area4<u8, false>(u32 addr, u8 data);
  template void pvr_write_area4<u16, false>(u32 addr, u16 data);
+diff --git a/core/hw/pvr/pvr_mem.h b/core/hw/pvr/pvr_mem.h
+index 2e2b147..e993e85 100644
+--- a/core/hw/pvr/pvr_mem.h
++++ b/core/hw/pvr/pvr_mem.h
+@@ -18,6 +18,15 @@ void YUV_serialize(Serializer& ser);
+ void YUV_deserialize(Deserializer& deser);
+ void YUV_reset();
+ 
++#ifdef CHIMERA_NO_PAGE_PROTECTION
++// A block write - any DMA - lands in vram by memcpy, under no handler at all.
++// It has to say so itself; see the note in pvr_mem.cpp. addr is an SH4
++// address, and anything outside vram is ignored, so callers need not look.
++void chimera_vram_written_range(u32 addr, u32 size);
++#else
++#define chimera_vram_written_range(addr, size) ((void)0)
++#endif
++
+ // 32-bit vram path handlers
+ template<typename T> T DYNACALL pvr_read32p(u32 addr);
+ template<typename T, bool Internal = false> void DYNACALL pvr_write32p(u32 addr, T data);
+diff --git a/core/hw/sh4/sh4_mem.cpp b/core/hw/sh4/sh4_mem.cpp
+index 196cdf5..29c11ef 100644
+--- a/core/hw/sh4/sh4_mem.cpp
++++ b/core/hw/sh4/sh4_mem.cpp
+@@ -203,6 +203,7 @@ void mem_Term()
+ 
+ void WriteMemBlock_nommu_dma(u32 dst, u32 src, u32 size)
+ {
++	chimera_vram_written_range(dst, size);
+ 	bool dst_ismem, src_ismem;
+ 	void* dst_ptr = addrspace::writeConst(dst, dst_ismem, 4);
+ 	void* src_ptr = addrspace::readConst(src, src_ismem, 4);
+@@ -225,6 +226,7 @@ void WriteMemBlock_nommu_dma(u32 dst, u32 src, u32 size)
+ 
+ void WriteMemBlock_nommu_ptr(u32 dst, const u32 *src, u32 size)
+ {
++	chimera_vram_written_range(dst, size);
+ 	bool dst_ismem;
+ 
+ 	void* dst_ptr = addrspace::writeConst(dst, dst_ismem, 4);
 diff --git a/core/rend/TexCache.cpp b/core/rend/TexCache.cpp
 index fbf4c58..e135111 100644
 --- a/core/rend/TexCache.cpp
