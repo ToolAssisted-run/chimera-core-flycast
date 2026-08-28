@@ -1,5 +1,5 @@
 diff --git a/core/hw/pvr/Renderer_if.cpp b/core/hw/pvr/Renderer_if.cpp
-index 6079cdc..2f004a9 100644
+index 6079cdc..07c76f0 100644
 --- a/core/hw/pvr/Renderer_if.cpp
 +++ b/core/hw/pvr/Renderer_if.cpp
 @@ -399,6 +399,7 @@ static SwapIntervalDetector swapIntervalDetector;
@@ -10,7 +10,7 @@ index 6079cdc..2f004a9 100644
  Renderer* rend_Vulkan();
  Renderer* rend_OITVulkan();
  Renderer* rend_DirectX9();
-@@ -407,7 +408,13 @@ Renderer* rend_OITDirectX11();
+@@ -407,7 +408,25 @@ Renderer* rend_OITDirectX11();
  
  static void rend_create_renderer()
  {
@@ -19,8 +19,20 @@ index 6079cdc..2f004a9 100644
 +	/* chimera: a sandbox has no GPU, and Flycast has no software renderer of
 +	 * its own. This build supplies one (skmp's reference rasteriser, see the
 +	 * host's waterbox/refsw-renderer.cpp) and selects it here - the same place
-+	 * upstream selects any other backend. */
++	 * upstream selects any other backend.
++	 *
++	 * ...unless this build has an OpenGL inside it. Mesa's softpipe compiled
++	 * into the guest is a real, complete GL implementation, so upstream's own
++	 * OpenGL renderer - the one its authors test - can draw instead, without a
++	 * GPU and without leaving the sandbox. Which one runs is a setting, so the
++	 * two can be compared on the same machine and the same frame.
++	 * See waterbox/gl-osmesa.cpp. */
++#if defined(CHIMERA_GUEST_GL)
++	extern bool chimera_gl_available();
++	renderer	 = chimera_gl_available() ? rend_GLES2() : rend_refsw();
++#else
 +	renderer	 = rend_refsw();
++#endif
 +#elif defined(NO_REND)
  	renderer	 = rend_norend();
  #else

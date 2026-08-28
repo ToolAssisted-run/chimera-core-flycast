@@ -146,7 +146,11 @@ int main(int argc, char **argv)
 	 * guest's heap. Sizing this like an 8-bit core is how the first sandboxed
 	 * run died: an allocation quietly failed and the machine wrote through a
 	 * null base. */
-	mb_memory_layout_template layout = { 256u << 20, 16u << 20, 64u << 20, 16u << 20, 256u << 20 };
+	/* sbrk, sealed, invisible, plain, mmap. Bigger than waterbox.config's
+	 * because this runner also has to hold a whole OpenGL implementation:
+	 * Mesa's context, softpipe's tiles and the GLSL compiler's arenas all come
+	 * out of the guest heap. */
+	mb_memory_layout_template layout = { 768u << 20, 16u << 20, 64u << 20, 16u << 20, 512u << 20 };
 	freader fr = { wf };
 	mb_return r;
 	wbx_create_host(&layout, "core.wbx", file_read, (uintptr_t)&fr, &r);

@@ -1,0 +1,121 @@
+diff --git a/core/rend/gles/chimera-no-imgui.h b/core/rend/gles/chimera-no-imgui.h
+new file mode 100644
+index 0000000..8430ddd
+--- /dev/null
++++ b/core/rend/gles/chimera-no-imgui.h
+@@ -0,0 +1,11 @@
++#pragma once
++// chimera: what stands in for ui/imgui_driver.h in a core.
++//
++// The GL renderer includes that header for two calls, both of which this
++// build compiles out (see patches/0008): telling the ImGui driver a frame
++// was rendered, and drawing the OSD over it. Nothing else in the renderer
++// wants anything from the user interface, so nothing else needs to be here.
++//
++// It is a file rather than nothing at all because gles.h has to include
++// SOMETHING, and a header that says why is worth more than an #ifdef that
++// does not.
+diff --git a/core/rend/gles/gles.cpp b/core/rend/gles/gles.cpp
+index aaecb6c..faaa640 100644
+--- a/core/rend/gles/gles.cpp
++++ b/core/rend/gles/gles.cpp
+@@ -1055,8 +1055,10 @@ void OpenGLRenderer::drawOSD()
+ {
+ 	drawVmusAndCrosshairs(width, height);
+ #ifndef LIBRETRO
++#ifndef CHIMERA_NO_IMGUI
+ 	gui_display_osd();
+ #endif
++#endif
+ }
+ 
+ void OpenGLRenderer::Process(TA_context* ctx)
+diff --git a/core/rend/gles/gles.h b/core/rend/gles/gles.h
+index 9082a5d..d2930a0 100755
+--- a/core/rend/gles/gles.h
++++ b/core/rend/gles/gles.h
+@@ -8,8 +8,15 @@
+ #include "rend/shader_util.h"
+ #include "rend/transform_matrix.h"
+ #ifndef LIBRETRO
++// chimera: a core has no on-screen UI. The GL renderer touches it in exactly
++// two places - telling the ImGui driver a frame was rendered, and drawing the
++// OSD - and dragging ImGui into a sandboxed guest for that would be absurd.
++#ifdef CHIMERA_NO_IMGUI
++#include "rend/gles/chimera-no-imgui.h"
++#else
+ #include "ui/imgui_driver.h"
+ #endif
++#endif
+ 
+ #include <unordered_map>
+ #include <glm/glm.hpp>
+@@ -521,7 +528,9 @@ struct OpenGLRenderer : Renderer
+ 		if (!frameRendered || clearLastFrame)
+ 			return false;
+ #ifndef LIBRETRO
++#ifndef CHIMERA_NO_IMGUI
+ 		imguiDriver->setFrameRendered();
++#endif
+ #endif
+ 		frameRendered = false;
+ 		return true;
+diff --git a/core/wsi/gl_context.cpp b/core/wsi/gl_context.cpp
+index 720de3b..7cd0d0d 100644
+--- a/core/wsi/gl_context.cpp
++++ b/core/wsi/gl_context.cpp
+@@ -19,7 +19,14 @@
+     along with Flycast.  If not, see <https://www.gnu.org/licenses/>.
+ */
+ #include "gl_context.h"
+-#if defined(LIBRETRO)
++// chimera: there is no window system on this side of the sandbox. The context
++// belongs to the host; what is wanted from this file is the part that asks the
++// DRIVER about itself (findGLVersion, the swap interval), which is the same on
++// every platform. The Create() factory that picks a window system, and the
++// ImGui backend it installs, are not.
++#if defined(CHIMERA_NO_IMGUI)
++// nothing to include: the platform half is compiled out below
++#elif defined(LIBRETRO)
+ #include "libretro.h"
+ #elif defined(TARGET_IPHONE)
+ #include "osx.h"
+@@ -31,7 +38,7 @@
+ #error Unsupported window system
+ #endif
+ 
+-#ifndef LIBRETRO
++#if !defined(LIBRETRO) && !defined(CHIMERA_NO_IMGUI)
+ #include "rend/gles/opengl_driver.h"
+ #endif
+ 
+@@ -77,14 +84,14 @@ void GLGraphicsContext::postInit()
+ 
+ void GLGraphicsContext::preTerm()
+ {
+-#ifndef LIBRETRO
++#if !defined(LIBRETRO) && !defined(CHIMERA_NO_IMGUI)
+ 	imguiDriver.reset();
+ #endif
+ }
+ 
+ void GLGraphicsContext::resetUIDriver()
+ {
+-#ifndef LIBRETRO
++#if !defined(LIBRETRO) && !defined(CHIMERA_NO_IMGUI)
+ 	imguiDriver.reset();
+ 	imguiDriver = std::unique_ptr<ImGuiDriver>(new OpenGLDriver());
+ #endif
+@@ -98,6 +105,7 @@ void GLGraphicsContext::setSwapInterval(int interval)
+ 	gameSwapIntervalChanged = true;
+ }
+ 
++#ifndef CHIMERA_NO_IMGUI
+ void GLGraphicsContext::Create(void *window, void *display)
+ {
+ #if defined(LIBRETRO)
+@@ -110,3 +118,4 @@ void GLGraphicsContext::Create(void *window, void *display)
+ 	EGLGraphicsContext::Create(window, display);
+ #endif
+ }
++#endif

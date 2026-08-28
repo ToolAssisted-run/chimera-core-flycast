@@ -81,6 +81,7 @@ inc = include_directories(
   fc / 'core/deps/json',
   fc / 'core/deps/glm',
   fc / 'core/deps/xxHash',
+  fc / 'core/deps/glad/include',   # the GL loader, for the OpenGL renderer
   fc / 'core/deps/libchdr/include',
   fc / 'core/deps/libchdr/deps/zlib-1.3.1',
   fc / 'core/deps/libchdr/deps/lzma-24.05/include',
@@ -91,9 +92,19 @@ inc = include_directories(
   'waterbox/refsw',
 )
 
+# A guest Mesa turns on Flycast's own OpenGL renderer: see
+# waterbox/gl-osmesa.cpp for what it is and why it is not a GPU.
+mesa = get_option('mesa_guest_dir')
+guest_gl = mesa != ''
+sources_env = environment()
+if guest_gl
+  sources_env.set('CHIMERA_GUEST_MESA', mesa)
+  add_project_arguments(['-DCHIMERA_GUEST_GL', '-DUSE_OPENGL', '-DCHIMERA_NO_IMGUI'], language: ['c', 'cpp'])
+endif
+
 sources_sh = files('waterbox/sources.sh')
-core_sources = files(run_command(sources_sh, 'main', check: true).stdout().strip().split('\n'))
-dep_sources = files(run_command(sources_sh, 'deps', check: true).stdout().strip().split('\n'))
+core_sources = files(run_command(sources_sh, 'main', env: sources_env, check: true).stdout().strip().split('\n'))
+dep_sources = files(run_command(sources_sh, 'deps', env: sources_env, check: true).stdout().strip().split('\n'))
 
 deps_lib = static_library('flycast-deps', dep_sources, include_directories: inc)
 
@@ -120,17 +131,40 @@ driver_sources = files(
   'waterbox/refsw/bridge.cpp',
 )
 
+if guest_gl
+  # the OpenGL context that is not a GPU: Mesa softpipe, inside the sandbox
+  driver_sources += files('waterbox/gl-osmesa.cpp')
+endif
+
 if meson.is_cross_build()
   # ---- the guest: core.wbx --------------------------------------------------
   mbdir = meson.get_external_property('minibox_dir')
   mbuild = meson.get_external_property('minibox_build')
   sr = meson.get_external_property('guest_sysroot')
 
+  # Mesa, for the guest. Its static archives are linked in a group because they
+  # refer to each other both ways, and the osmesa target's own object comes
+  # separately: the shared library it belongs to cannot be built for a guest
+  # (-fno-pic, -mcmodel=large), but osmesa_create_screen lives in it.
+  mesa_link = []
+  if guest_gl
+    mesa_archives = run_command('find', mesa / 'build-guest2', '-name', '*.a',
+      check: true).stdout().strip().split('\n')
+    mesa_target = run_command('find', mesa / 'build-guest2/src/gallium/targets/osmesa',
+      '-name', 'target.c.o', check: true).stdout().strip().split('\n')
+    # Mesa declares pthread_mutexattr_* WEAK as a build workaround. Statically
+    # linked they would resolve to address zero, and Mesa calls null the first
+    # time it makes a recursive mutex.
+    mesa_link = mesa_target + ['-Wl,--start-group'] + mesa_archives + ['-Wl,--end-group',
+      '-Wl,-u,pthread_mutexattr_init', '-Wl,-u,pthread_mutexattr_settype',
+      '-Wl,-u,pthread_mutexattr_destroy']
+  endif
+
   executable('core', core_sources + driver_sources,
     name_suffix: 'wbx',
     include_directories: inc,
     link_with: [deps_lib, refsw_lib],
-    link_args: [
+    link_args: mesa_link + [
       '-static', '-no-pie',
       '-Wl,--eh-frame-hdr', '-Wl,-O2', '-Wl,--no-relax',
       '-Wl,-z,stack-size=8388608',

@@ -10,7 +10,13 @@
 # should be picked up; one that adds a GPU backend should not.
 #
 # What is deliberately absent, and why:
-#   rend/gles, rend/vulkan, rend/dx9, rend/dx11   no GPU in a sandbox
+#   rend/vulkan, rend/dx9, rend/dx11              no GPU in a sandbox
+#   rend/gles                                     compiled when this core is
+#                                                 built with a guest Mesa: the
+#                                                 GL renderer and the GL that
+#                                                 answers it both run INSIDE
+#                                                 the sandbox (see
+#                                                 waterbox/gl-osmesa.cpp)
 #   network/, hw/bba, hw/modem                    no sockets in a sandbox, and
 #                                                 netplay is not a TAS feature
 #   ui/, sdl/, windows/, achievements/, lua/      a frontend already exists
@@ -70,6 +76,23 @@ core_srcs() {
 	for f in TexCache.cpp texconv.cpp sorter.cpp CustomTexture.cpp transform_matrix.cpp norend/norend.cpp; do
 		echo "$fc/core/rend/$f"
 	done
+	# The OpenGL renderer, when there is an OpenGL for it to call. Mesa's
+	# softpipe is compiled into the guest, so this is not a GPU and not a
+	# bridge to one: it is a second software rasteriser, and the one Flycast's
+	# authors actually test against.
+	# ...minus opengl_driver.cpp, which is the ImGui backend: it draws a
+	# desktop application's menus, not the machine's picture.
+	if [ -n "${CHIMERA_GUEST_MESA:-}" ]; then
+		for f in gles.cpp gldraw.cpp gltex.cpp quad.cpp postprocess.cpp naomi2.cpp; do
+			echo "$fc/core/rend/gles/$f"
+		done
+		echo "$fc/core/deps/glad/src/gl.c"
+		# the context the renderer asks about itself - version, driver name,
+		# swap interval - with the window-system half left where it belongs
+		echo "$fc/core/wsi/context.cpp"
+		echo "$fc/core/wsi/gl_context.cpp"
+	fi
+
 	# oslib is the host abstraction; the sandbox has no audio device, no HTTP
 	# client, no translations, and no resource bundle (that one reads fonts out
 	# of a zip, for a UI this core does not have).

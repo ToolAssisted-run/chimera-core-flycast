@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include <emulibc.h>
 #include <waterbox_settings.h>
@@ -35,6 +36,15 @@
 #include "cfg/option.h"
 #include "cfg/cfg.h"
 #include "hw/maple/maple_devs.h"
+#if defined(CHIMERA_GUEST_GL)
+#include "hw/pvr/Renderer_if.h"
+/* At FILE scope on purpose: a declaration inside an ECL_EXPORT function body
+ * inherits that function's C linkage, and these are defined as C++ in
+ * waterbox/gl-osmesa.cpp. That mismatch has cost this project an afternoon
+ * twice now. */
+bool chimera_gl_start();
+bool chimera_gl_available();
+#endif
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_if.h"
 #include "hw/mem/addrspace.h"
@@ -285,6 +295,25 @@ ECL_EXPORT int Init(void)
 		for (int port = 1; port < 4; port++)
 			config::MapleMainDevices[port] = MDT_None;
 
+#if defined(CHIMERA_GUEST_GL)
+		/* Which renderer draws. Both are software - one is skmp's reference
+		 * rasteriser, the other is Flycast's own OpenGL renderer running
+		 * against a Mesa softpipe compiled into this guest
+		 * (waterbox/gl-osmesa.cpp). The OpenGL one is what upstream tests and
+		 * what gets a game's picture right. Neither leaves the sandbox and
+		 * neither asks the machine it runs on anything, so a movie made under
+		 * one replays under the other.
+		 *
+		 * It goes HERE, after init() and loadGame(), and not before them:
+		 * bringing Mesa up first moves every allocation Flycast then makes,
+		 * and addrspace::initMappings wrote off the end of the guest. */
+		{
+			static const char *const renderers[] = { "software", "opengl" };
+			if (SettingIndex("renderer", renderers, 2, 0) == 1 && !chimera_gl_start())
+				fprintf(stderr, "chimera: OpenGL would not start, drawing in software\n");
+		}
+#endif
+
 		/* Bring the renderer up. On a desktop this is the graphics context's
 		 * job - whoever owns the window creates the device and then calls
 		 * this - and with no window nobody does, which leaves the renderer
@@ -347,6 +376,35 @@ extern "C" const uint32_t *chimera_refsw_frame(int *width, int *height);
 
 ECL_EXPORT uint32_t *GetVideoBgra(void)
 {
+#if defined(CHIMERA_GUEST_GL)
+	if (chimera_gl_available())
+	{
+		/* Flycast already knows how to get its own picture back: the renderer
+		 * keeps it in a framebuffer of its own and hands it over through
+		 * GetLastFrame, which is what a screenshot takes. Reading framebuffer
+		 * 0 instead reads whatever was left lying there. It arrives as RGB
+		 * rows; the frontend wants BGRA. */
+		static std::vector<u8> rgb;
+		int w = 0, h = 0;
+		if (renderer != nullptr && renderer->GetLastFrame(rgb, w, h) && w > 0 && h > 0)
+		{
+			if (w > DC_WIDTH) w = DC_WIDTH;
+			if (h > DC_HEIGHT) h = DC_HEIGHT;
+			g_videoWidth = w;
+			g_videoHeight = h;
+
+			for (int y = 0; y < h; y++)
+			{
+				const uint8_t *src = &rgb[(size_t)y * w * 3];
+				uint32_t *dst = &g_video[(size_t)y * w];
+				for (int x = 0; x < w; x++, src += 3)
+					dst[x] = 0xFF000000u | (src[0] << 16) | (src[1] << 8) | src[2];
+			}
+		}
+		return g_video;
+	}
+#endif
+
 	int w = 0, h = 0;
 	const uint32_t *frame = chimera_refsw_frame(&w, &h);
 	g_videoWidth = w;

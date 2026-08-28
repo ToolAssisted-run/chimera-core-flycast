@@ -1,1 +1,4 @@
 option('minibox_dir', type: 'string', value: '', description: 'miniBox checkout (guest kit + host)')
+
+option('mesa_guest_dir', type: 'string', value: '',
+  description: 'A Mesa built for the guest (see ~/minihawk-tools/mesa-guest). With one, this core also builds Flycast\'s own OpenGL renderer and runs it against Mesa softpipe INSIDE the sandbox - a real GL implementation, no GPU, still deterministic. Without one, only the reference software rasteriser is built.')
