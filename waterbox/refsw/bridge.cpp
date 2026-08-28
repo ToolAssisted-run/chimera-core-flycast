@@ -9,9 +9,11 @@
 #include "refsw_lists.h"
 #include "refsw-host.h"
 #include "bridge.h"
+#include <cstdlib>
 
 #include <cfloat>
 #include <cstddef>
+#include <unordered_map>
 #include <vector>
 
 /* The agreement, checked. If a Vertex ever stops being the same shape on both
@@ -43,6 +45,22 @@ struct Registered {
 };
 static std::vector<Registered> g_registered;
 
+/* A tag has to mean the SAME triangle every time the tile sees it.
+ *
+ * CORE renders translucency by peeling: it draws the list again and again,
+ * each pass keeping the layer nearest the one before. Where two polygons are
+ * coplanar - which in a 2D game is nearly all of them - it breaks the tie by
+ * comparing their TAGS, and a tag is a parameter address, so it is the same
+ * number in every pass. Handing out a fresh number per submission made every
+ * pass compare this pass's tags against the last pass's, which are always
+ * smaller, so the tie-break dropped the pixel and the picture came apart.
+ *
+ * The key is where the triangle came from - list, polygon, position in the
+ * strip - so the same triangle keeps its tag for as long as the tile lasts,
+ * and tags still increase in submission order, which is what the tie-break
+ * actually asks of them. */
+static std::unordered_map<uint64_t, uint32_t> g_tagOf;
+
 /* Diagnostics for CHIMERA_REFSW_TRACE: how many triangles this tile has taken. */
 static unsigned g_triangles;
 
@@ -71,10 +89,28 @@ void refsw_begin_tile(int left, int top, uint32_t bgTag, float bgDepth)
 	ClearBuffers(TAG_INVALID, bgDepth, 0);
 	ClearFpuEntries();
 	g_registered.clear();
+	g_tagOf.clear();
 	g_triangles = 0;
 }
 
-void refsw_triangle(int mode, const RefswParams *params, uint32_t tag,
+void refsw_set_sorted(int on)
+{
+	extern int chimera_force_presort;
+	chimera_force_presort = on;
+}
+
+void refsw_set_clip(int mode, int x0, int y0, int x1, int y1)
+{
+	extern int chimera_clip_mode, chimera_clip_x0, chimera_clip_y0,
+		chimera_clip_x1, chimera_clip_y1;
+	chimera_clip_mode = mode;
+	chimera_clip_x0 = x0;
+	chimera_clip_y0 = y0;
+	chimera_clip_x1 = x1;
+	chimera_clip_y1 = y1;
+}
+
+void refsw_triangle(int mode, const RefswParams *params, uint64_t key,
                     const void *v1, const void *v2, const void *v3,
                     int left, int top)
 {
@@ -89,8 +125,20 @@ void refsw_triangle(int mode, const RefswParams *params, uint32_t tag,
 	reg.v[0] = *(const Vertex *)v1;
 	reg.v[1] = *(const Vertex *)v2;
 	reg.v[2] = *(const Vertex *)v3;
-	g_registered.push_back(reg);
-	const u32 ourTag = (u32)g_registered.size();   /* 1-based; 0 means "none" */
+
+	u32 ourTag;   /* 1-based; 0 means "none" */
+	auto it = g_tagOf.find(key);
+	if (it != g_tagOf.end())
+	{
+		ourTag = it->second;
+		g_registered[ourTag - 1] = reg;
+	}
+	else
+	{
+		g_registered.push_back(reg);
+		ourTag = (u32)g_registered.size();
+		g_tagOf.emplace(key, ourTag);
+	}
 
 	g_triangles++;
 	RasterizeTriangle((RenderMode)mode, &reg.params, ourTag,
@@ -132,7 +180,8 @@ void refsw_pass(int mode, int left, int top, refsw_submit_fn submit, void *user)
 			for (int peel = 0; peel < MAX_PEELS; peel++)
 			{
 				ClearMoreToDraw();
-				if (!ISP_FEED_CFG.pre_sort)
+				extern int chimera_force_presort;
+				if (!chimera_force_presort && !ISP_FEED_CFG.pre_sort)
 					PeelBuffers(FLT_MAX, 0);
 				submit(user);
 				RenderParamTags(RM_TRANSLUCENT, left, top);

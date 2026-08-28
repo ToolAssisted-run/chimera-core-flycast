@@ -34,9 +34,16 @@
 #include "hw/pvr/pvr_regs.h"
 #include "hw/pvr/pvr_mem.h"
 
+#include "rend/TexCache.h"
+
+#include "refsw/TexUtils.h"
 #include "refsw/bridge.h"
 
+/* CHIMERA_TEXCMP: this rasteriser's own decode, for comparison. */
+extern void chimera_refsw_decode(u32 tsp, u32 tcw, u32 *out, int w, int h);
+
 #include <algorithm>
+#include <set>
 #include <cstdlib>
 #include <cstddef>
 
@@ -67,6 +74,8 @@ static unsigned g_passTriangles[3];
 static unsigned g_passLit[3];
 static bool g_trace;
 static unsigned g_texturedPolys;
+static unsigned g_clipped;
+static void CompareTexture(const PolyParam &pp);   /* CHIMERA_TEXCMP, below */
 static unsigned g_pixelFormats[8];
 static unsigned g_stride, g_twiddled, g_vq, g_mipmapped;
 
@@ -115,6 +124,40 @@ static inline bool TouchesTile(const Vertex& a, const Vertex& b, const Vertex& c
 	return maxY >= (float)top;
 }
 
+/* The PVR's per-polygon user clip, decoded the way upstream decodes it
+ * (TransformMatrix::getTileClip). The rectangle is in 32 pixel units, and the
+ * mode's low bit chooses which SIDE of it survives - the naming in
+ * transform_matrix.h is upstream's, where "Inside" means render what is
+ * outside.
+ *
+ * Every GPU backend turns this into a scissor. This renderer ignored it until
+ * 2026-08-28, and a game that clips every sprite it draws - Street Fighter
+ * Zero 3 clips all 701 of them - had them all splashed across the screen. */
+static void ApplyUserClip(const PolyParam &pp)
+{
+	const u32 val = pp.tileclip;
+	const u32 clipmode = val >> 28;
+	if (clipmode < 2)
+	{
+		refsw_set_clip(0, 0, 0, 0, 0);
+		return;
+	}
+
+	const int x0 = (int)(val & 63) * 32;
+	const int x1 = (int)(((val >> 6) & 63) + 1) * 32;
+	const int y0 = (int)((val >> 12) & 31) * 32;
+	const int y1 = (int)(((val >> 17) & 31) + 1) * 32;
+
+	refsw_set_clip((clipmode & 1) ? 1 : 2, x0, y0, x1, y1);
+}
+
+/* Where a triangle came from, which is what makes its tag stable across the
+ * peel passes (see refsw/bridge.cpp). */
+static inline uint64_t KeyFor(int which, u32 poly, u32 tri)
+{
+	return ((uint64_t)which << 56) | ((uint64_t)poly << 24) | tri;
+}
+
 static bool ChimeraGSTraceRenderer()
 {
 	static const bool on = getenv("CHIMERA_REFSW_TRACE") != nullptr;
@@ -157,6 +200,45 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 		const Vertex *verts = rc.verts.data();
 		const u32 *indices = rc.idx.data();
 
+		/* The translucent list, in the order Flycast's sorter put it.
+		 *
+		 * When the TA sorts translucency itself, upstream sorts the triangles
+		 * on the CPU and every GPU backend draws them in that order: a plain
+		 * triangle list in rc.idx, one run per polygon. Drawing them the same
+		 * way here is what makes this renderer's picture the same picture -
+		 * see refsw_set_sorted for why peeling cannot stand in for it. */
+		if (sub.which == 2 && !rc.sortedTriangles.empty())
+		{
+			for (size_t si = 0; si < rc.sortedTriangles.size(); si++)
+			{
+				const SortedTriangle& st = rc.sortedTriangles[si];
+				if (st.polyIndex >= sub.polys->size())
+					continue;
+				const PolyParam& pp = (*sub.polys)[st.polyIndex];
+
+				ApplyUserClip(pp);
+
+				RefswParams params;
+				params.isp = IspForRefsw(pp);
+				params.tsp[0] = pp.tsp.full;
+				params.tcw[0] = pp.tcw.full;
+				params.tsp[1] = pp.tsp1.full;
+				params.tcw[1] = pp.tcw1.full;
+
+				for (u32 j = 0; j + 2 < st.count; j += 3)
+				{
+					const Vertex& a = verts[indices[st.first + j]];
+					const Vertex& b = verts[indices[st.first + j + 1]];
+					const Vertex& c = verts[indices[st.first + j + 2]];
+					if (!TouchesTile(a, b, c, sub.left, sub.top))
+						continue;
+					refsw_triangle(sub.mode, &params, KeyFor(sub.which, (u32)si, j),
+						&a, &b, &c, sub.left, sub.top);
+				}
+			}
+			return;
+		}
+
 		for (size_t i = 0; i < sub.polys->size(); i++)
 		{
 			const PolyParam& pp = (*sub.polys)[i];
@@ -173,6 +255,7 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 			 * frame left behind. */
 			if (sub.which == 0 && i == 0)
 			{
+				ApplyUserClip(pp);
 				RefswParams bg;
 				bg.isp = IspForRefsw(pp);
 				bg.tsp[0] = pp.tsp.full;
@@ -180,8 +263,8 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 				bg.tsp[1] = pp.tsp1.full;
 				bg.tcw[1] = pp.tcw1.full;
 				const Vertex *q = rc.verts.data();
-				refsw_triangle(sub.mode, &bg, 1, &q[0], &q[1], &q[2], sub.left, sub.top);
-				refsw_triangle(sub.mode, &bg, 2, &q[1], &q[2], &q[3], sub.left, sub.top);
+				refsw_triangle(sub.mode, &bg, KeyFor(sub.which, i, 0), &q[0], &q[1], &q[2], sub.left, sub.top);
+				refsw_triangle(sub.mode, &bg, KeyFor(sub.which, i, 1), &q[1], &q[2], &q[3], sub.left, sub.top);
 				continue;
 			}
 
@@ -194,6 +277,10 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 				if (!pp.tcw.ScanOrder) g_twiddled++;
 				if (pp.tcw.VQ_Comp) g_vq++;
 				if (pp.tcw.MipMapped) g_mipmapped++;
+				if (pp.tileclip) g_clipped++;
+				static const bool texcmp = getenv("CHIMERA_TEXCMP") != nullptr;
+				if (texcmp)
+					CompareTexture(pp);   /* the set below keeps it to one report each */
 				if (g_texturedPolys <= 5 && sub.left == 0 && sub.top == 0)
 					fprintf(stderr, "        texture %u: addr %08x %ux%u fmt %u twiddled %u stride %u pal %u\n",
 						g_texturedPolys, pp.tcw.TexAddr << 3,
@@ -201,6 +288,8 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 						(unsigned)pp.tcw.PixelFmt, (unsigned)!pp.tcw.ScanOrder,
 						(unsigned)pp.tcw.StrideSel, (unsigned)pp.tcw.PalSelect);
 			}
+
+			ApplyUserClip(pp);
 
 			RefswParams params;
 			params.isp = IspForRefsw(pp);
@@ -247,10 +336,11 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 				 * other end. */
 				if (!TouchesTile(a, b, c, sub.left, sub.top))
 					continue;
+				const uint64_t key = KeyFor(sub.which, i, t);
 				if ((t - stripStart) & 1)
-					refsw_triangle(sub.mode, &params, (uint32_t)i + 1, &b, &a, &c, sub.left, sub.top);
+					refsw_triangle(sub.mode, &params, key, &b, &a, &c, sub.left, sub.top);
 				else
-					refsw_triangle(sub.mode, &params, (uint32_t)i + 1, &a, &b, &c, sub.left, sub.top);
+					refsw_triangle(sub.mode, &params, key, &a, &b, &c, sub.left, sub.top);
 			}
 		}
 	};
@@ -264,9 +354,19 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 		if (polys.empty())
 			continue;
 
+		/* CHIMERA_PASSES is a bit mask (1 opaque, 2 punch-through, 4
+		 * translucent): which lists to draw, for bisecting a bad picture. */
+		static const int passMask = getenv("CHIMERA_PASSES") ? atoi(getenv("CHIMERA_PASSES")) : 7;
+		if (!(passMask & (1 << pass.which)))
+			continue;
+
 		Submission sub{ &rc, &polys, pass.mode, pass.which, left, top };
 		const unsigned before = refsw_tile_triangles();
+		/* Sorted translucency is drawn in order, not peeled. */
+		const bool sorted = pass.which == 2 && !rc.sortedTriangles.empty();
+		refsw_set_sorted(sorted ? 1 : 0);
 		refsw_pass(pass.mode, left, top, submit, &sub);
+		refsw_set_sorted(0);
 		g_passTriangles[pass.which] += refsw_tile_triangles() - before;
 		g_passLit[pass.which] = refsw_tile_lit();
 	}
@@ -291,11 +391,162 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 	}
 }
 
+/* CHIMERA_TEXCMP: decode every texture twice and say where the two decoders
+ * disagree.
+ *
+ * This rasteriser reads VRAM itself, texel by texel. Flycast's texture cache
+ * converts a whole texture up front, and it is the decoder every GPU backend
+ * uses - the one games are known to look right through. Reading the same VRAM
+ * the two must agree, and the first texel where they do not is the bug.
+ */
+namespace
+{
+	struct ReferenceTexture : BaseTextureCacheData
+	{
+		std::vector<u32> pixels;
+		int w = 0, h = 0;
+
+		ReferenceTexture(TSP tsp, TCW tcw) : BaseTextureCacheData(tsp, tcw, 0) {}
+		/* Update() registers a vram lock pointing at this object. It has to be
+		 * taken back, or the next DMA that invalidates the page walks into a
+		 * texture that stopped existing when this function returned. */
+		~ReferenceTexture() { Delete(); }
+		std::string GetId() override { return ""; }
+		/* ARGB8888 whatever the texture is, so both can be read as one kind
+		 * of number. */
+		bool Force32BitTexture(TextureType) const override { return true; }
+		void UploadToGPU(int width, int height, const u8 *data, bool, bool mipsIncluded) override
+		{
+			w = width;
+			h = height;
+			/* With mipmaps the levels share one buffer, smallest first, so the
+			 * full-size level is the last width*height of it. */
+			size_t total = (size_t)width * height;
+			if (mipsIncluded && width == height)   /* mipmaps are square */
+			{
+				total = 0;
+				for (int side = 1; side <= width; side *= 2)
+					total += (size_t)side * side;
+			}
+			const u32 *end = (const u32 *)data + total;
+			pixels.assign(end - (size_t)width * height, end);
+		}
+	};
+}
+
+static void CompareTexture(const PolyParam &pp)
+{
+	/* One report per distinct texture, or a frame of sprites drowns the log. */
+	static std::set<std::pair<u32, u32>> seen;
+	if (seen.size() > 120 || !seen.insert({ pp.tcw.full, pp.tsp.full }).second)
+		return;
+
+	ReferenceTexture ref(pp.tsp, pp.tcw);
+	if (!ref.Update() || ref.pixels.size() != (size_t)ref.w * ref.h || ref.w <= 0)
+	{
+		fprintf(stderr, "  texcmp: no reference for %08x fmt %u\n",
+			pp.tcw.TexAddr << 3, (unsigned)pp.tcw.PixelFmt);
+		return;
+	}
+
+	const int w = ref.w, h = ref.h;
+	std::vector<u32> mine((size_t)w * h);
+	chimera_refsw_decode(pp.tsp.full, pp.tcw.full, mine.data(), w, h);
+
+	/* Decode it a second time as if it were not mipmapped. If THAT is the one
+	 * that matches, the two disagree about where the full-size level starts,
+	 * not about how to read a texel. */
+	TCW flat = pp.tcw;
+	flat.MipMapped = 0;
+	std::vector<u32> mineFlat((size_t)w * h);
+	chimera_refsw_decode(pp.tsp.full, flat.full, mineFlat.data(), w, h);
+	size_t flatWrong = 0, transposedWrong = 0;
+
+	/* The two write their channels in different orders - this rasteriser in
+	 * ARGB, the texture cache in RGBA - and they expand 5 and 6 bit channels
+	 * differently (a shift here, a shift with the top bits repeated there).
+	 * Neither of those can shred a picture, so separate them from the case
+	 * that can: a texel that is a different COLOUR. */
+	size_t rounding = 0, wrong = 0;
+	int firstU = -1, firstV = -1;
+	for (int v = 0; v < h; v++)
+		for (int u = 0; u < w; u++)
+		{
+			u32 a = mine[(size_t)v * w + u];		// ARGB
+			u32 b = ref.pixels[(size_t)v * w + u];	// RGBA
+			int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF, aa = a >> 24;
+			int br = b & 0xFF, bg = (b >> 8) & 0xFF, bb = (b >> 16) & 0xFF, ba = b >> 24;
+			int d = std::max(std::max(abs(ar - br), abs(ag - bg)),
+			                 std::max(abs(ab - bb), abs(aa - ba)));
+			if (d == 0)
+				continue;
+			if (d <= 16)   /* the widest a 4 bit channel can differ by expansion */
+				rounding++;
+			else
+			{
+				if (firstU < 0) { firstU = u; firstV = v; }
+				wrong++;
+			}
+		}
+
+	/* And once more against the transpose: if THAT is the match, the two
+	 * disagree about which way round u and v go, not about the data. */
+	if (w == h)
+		for (int v = 0; v < h; v++)
+			for (int u = 0; u < w; u++)
+			{
+				u32 a = mine[(size_t)u * w + v];
+				u32 b = ref.pixels[(size_t)v * w + u];
+				int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF, aa = a >> 24;
+				int br = b & 0xFF, bg = (b >> 8) & 0xFF, bb = (b >> 16) & 0xFF, ba = b >> 24;
+				int d = std::max(std::max(abs(ar - br), abs(ag - bg)),
+				                 std::max(abs(ab - bb), abs(aa - ba)));
+				if (d > 16)
+					transposedWrong++;
+			}
+
+	for (int v = 0; v < h; v++)
+		for (int u = 0; u < w; u++)
+		{
+			u32 a = mineFlat[(size_t)v * w + u];
+			u32 b = ref.pixels[(size_t)v * w + u];
+			int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF, aa = a >> 24;
+			int br = b & 0xFF, bg = (b >> 8) & 0xFF, bb = (b >> 16) & 0xFF, ba = b >> 24;
+			int d = std::max(std::max(abs(ar - br), abs(ag - bg)),
+			                 std::max(abs(ab - bb), abs(aa - ba)));
+			if (d > 16)
+				flatWrong++;
+		}
+
+	fprintf(stderr, "  texcmp %08x fmt %u %ux%u tw %u vq %u mip %u pal %u stride %u: "
+		"%zu wrong, %zu rounding, of %d",
+		pp.tcw.TexAddr << 3, (unsigned)pp.tcw.PixelFmt, w, h,
+		(unsigned)!pp.tcw.ScanOrder, (unsigned)pp.tcw.VQ_Comp,
+		(unsigned)pp.tcw.MipMapped, (unsigned)pp.tcw.PalSelect,
+		(unsigned)pp.tcw.StrideSel, wrong, rounding, w * h);
+	if (w == h)
+		fprintf(stderr, " [transposed: %zu wrong]", transposedWrong);
+	if (pp.tcw.MipMapped)
+		fprintf(stderr, " [as flat: %zu wrong; flycast mipmapped=%d]", flatWrong, (int)ref.IsMipmapped());
+	if (wrong)
+		fprintf(stderr, " (first at %d,%d: refsw argb %08x, flycast rgba %08x)",
+			firstU, firstV, mine[(size_t)firstV * w + firstU],
+			ref.pixels[(size_t)firstV * w + firstU]);
+	fprintf(stderr, "\n");
+}
+
 struct refswrend : Renderer
 {
 	bool Init() override
 	{
 		emu_vram = &vram[0];
+		/* The twiddle table. Without it every twiddled texture reads one
+		 * constant address and comes out a flat colour - which is what this
+		 * renderer did until 2026-08-28, because refsw declares BuildTables()
+		 * and never calls it: upstream calls it from its own texture cache
+		 * init, which this core does not use. Nothing in the gate is
+		 * textured, so nothing noticed. */
+		BuildTables();
 		return true;
 	}
 
@@ -331,6 +582,7 @@ struct refswrend : Renderer
 
 		g_passTriangles[0] = g_passTriangles[1] = g_passTriangles[2] = 0;
 		g_texturedPolys = 0;
+		g_clipped = 0;
 		memset(g_pixelFormats, 0, sizeof(g_pixelFormats));
 		g_stride = g_twiddled = g_vq = g_mipmapped = 0;
 
@@ -347,13 +599,14 @@ struct refswrend : Renderer
 				if (g_frame[i] & 0x00FFFFFF)
 					lit++;
 			fprintf(stderr, "refsw %d: %dx%d op=%zu pt=%zu tr=%zu mvo=%zu verts=%zu idx=%zu lit=%zu"
-				" tris(op=%u pt=%u tr=%u) textured=%u fmt(1555=%u 565=%u 4444=%u yuv=%u bump=%u pal4=%u pal8=%u)\n",
+				" tris(op=%u pt=%u tr=%u) textured=%u clipped=%u fmt(1555=%u 565=%u 4444=%u yuv=%u bump=%u pal4=%u pal8=%u)\n",
 				traceFrame++, g_frameWidth, g_frameHeight,
 				rendContext->global_param_op.size(), rendContext->global_param_pt.size(),
 				rendContext->global_param_tr.size(), rendContext->global_param_mvo.size(),
 				rendContext->verts.size(), rendContext->idx.size(), lit,
 				g_passTriangles[0], g_passTriangles[1], g_passTriangles[2],
 				g_texturedPolys / 300,
+				g_clipped / 300,
 				g_pixelFormats[0] / 300, g_pixelFormats[1] / 300, g_pixelFormats[2] / 300,
 				g_pixelFormats[3] / 300, g_pixelFormats[4] / 300, g_pixelFormats[5] / 300,
 				g_pixelFormats[6] / 300);

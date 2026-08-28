@@ -329,6 +329,43 @@ u32 decode_pvr_vertices(DrawParameters* params, pvr32addr_t base, u32 skip, u32 
 extern "C" bool chimera_fpu_entry(u32 tag, taRECT *rect, void *out) __attribute__((weak));
 extern "C" bool chimera_fpu_entry(u32 tag, taRECT *rect, void *out) { return false; }
 
+/* chimera: draw the translucent list in a given order instead of peeling it.
+ *
+ * CORE sorts translucency by depth peeling: it draws the list again and again,
+ * each pass keeping one layer. That is what the hardware does and what this
+ * rasteriser implements, and it converges in as many passes as there are
+ * OVERLAPPING layers - which for a 2D game, where hundreds of sprites sit at
+ * the same depth, is hundreds. Flycast's own answer for those games is to sort
+ * the triangles on the CPU and draw them in order, which is what every GPU
+ * backend does and what upstream's picture is; this flag asks for the same
+ * path, which the hardware already has for games that pre-sort themselves. */
+int chimera_force_presort;
+
+static inline bool refsw_pre_sort()
+{
+    return chimera_force_presort != 0 || ISP_FEED_CFG.pre_sort != 0;
+}
+
+/* chimera: the PVR's user clip.
+ *
+ * Every polygon carries a clip rectangle and a mode saying whether to draw
+ * only inside it or only outside it, and every GPU backend applies it as a
+ * scissor. This rasteriser had no notion of one, so a game that clips its
+ * sprites - Street Fighter Zero 3 clips ALL of them - had them drawn across
+ * the whole screen. The rectangle is in screen pixels, so the test needs the
+ * tile's own origin added back. */
+int chimera_clip_mode;   // 0 off, 1 draw outside the rect, 2 draw inside it
+int chimera_clip_x0, chimera_clip_y0, chimera_clip_x1, chimera_clip_y1;
+
+static inline bool chimera_clip_test(int px, int py)
+{
+    if (chimera_clip_mode == 0)
+        return true;
+    const bool inside = px >= chimera_clip_x0 && px < chimera_clip_x1
+                     && py >= chimera_clip_y0 && py < chimera_clip_y1;
+    return chimera_clip_mode == 2 ? inside : !inside;
+}
+
 FpuEntry GetFpuEntry(taRECT *rect, RenderMode render_mode, ISP_BACKGND_T_type core_tag)
 {
     FpuEntry entry = {};
@@ -457,14 +494,15 @@ void RasterizeTriangle(RenderMode render_mode, DrawParameters* params, parameter
             float Xhs31 = C3 + DX31 * y_ps - DY31 * x_ps;
             float Xhs41 = C4 + DX41 * y_ps - DY41 * x_ps;
 
-            bool inTriangle = Xhs12 >= 0 && Xhs23 >= 0 && Xhs31 >= 0 && Xhs41 >= 0;
+            bool inTriangle = Xhs12 >= 0 && Xhs23 >= 0 && Xhs31 >= 0 && Xhs41 >= 0
+                              && chimera_clip_test(area->left + x, area->top + y);
 			
             if (inTriangle) {
                 u32 index = y * 32 + x;
                 float invW = Z.Ip(x_ps, y_ps);
                 PixelFlush_isp(render_mode, params->isp.DepthMode, params->isp.ZWriteDis, x_ps, y_ps, invW, index, tag);
 
-                if (render_mode == RM_TRANSLUCENT && ISP_FEED_CFG.pre_sort && !(tagBuffer[tagBufferA][index] & TAG_INVALID)) {
+                if (render_mode == RM_TRANSLUCENT && refsw_pre_sort() && !(tagBuffer[tagBufferA][index] & TAG_INVALID)) {
                     ISP_BACKGND_T_type t { .full = tagBuffer[tagBufferA][index] };
                     auto Entry = GetFpuEntry(area, RM_TRANSLUCENT, t);
                     PixelFlush_tsp(false, &Entry, x_ps, y_ps, index, invW, false);
@@ -778,11 +816,35 @@ u32 to_u8_256(u8 v) {
     return v + (v >> 7);
 }
 // Fetch pixels from UVs, interpolate
+// chimera diagnostic (CHIMERA_TEXCMP): decode a texture the way this
+// rasteriser does, so it can be compared against the way Flycast's own texture
+// cache does. Two decoders reading the same VRAM must agree texel for texel;
+// where they stop agreeing is the bug.
+// Raw words in, the way everything else crosses this boundary: the two sides
+// have their own TSP/TCW definitions (see bridge.h).
+
+void chimera_refsw_decode(u32 tspWord, u32 tcwWord, u32 *out, int w, int h)
+{
+    TSP tsp; tsp.full = tspWord;
+    TCW tcw; tcw.full = tcwWord;
+    for (int v = 0; v < h; v++)
+        for (int u = 0; u < w; u++)
+            out[v * w + u] = TextureFetch(tsp, tcw, u, v, 0).raw;
+}
+
 static Color TextureFilter(
 	bool pp_IgnoreTexA,  bool pp_ClampU, bool pp_ClampV, bool pp_FlipU, bool pp_FlipV, u32 pp_FilterMode,
 	TSP tsp, TCW tcw, float u, float v, u32 MipLevel, f32 dTrilinear) {
         
-    int halfpixel = HALF_OFFSET.texure_pixel_half_offset ? -127 : 0;
+    /* The texture half offset centres a BILINEAR kernel: it shifts the sample
+     * back half a texel so the 2x2 straddles the sample point. Point sampling
+     * wants the texel the sample point is IN, and shifting it there reads one
+     * texel too far back - which at the left edge of a quad means the
+     * neighbouring cell of a texture atlas. That is where the thin dark seams
+     * down Street Fighter Zero 3's background came from: its background is one
+     * atlas drawn as twelve columns, and every column showed its neighbour's
+     * border in its first pixel. */
+    int halfpixel = (HALF_OFFSET.texure_pixel_half_offset && pp_FilterMode != 0) ? -127 : 0;
     if (MipLevel >= (tsp.TexU + 3)) {
         MipLevel = tsp.TexU+3;
     }
@@ -1228,7 +1290,7 @@ void PixelFlush_isp(RenderMode render_mode, u32 depth_mode, u32 ZWriteDis, float
         
     if (render_mode == RM_PUNCHTHROUGH)
         mode = 6; // TODO: FIXME
-    else if (render_mode == RM_TRANSLUCENT && !ISP_FEED_CFG.pre_sort)
+    else if (render_mode == RM_TRANSLUCENT && !refsw_pre_sort())
         mode = 3;
     else if (render_mode == RM_MODIFIER)
         mode = 6;
@@ -1242,7 +1304,7 @@ void PixelFlush_isp(RenderMode render_mode, u32 depth_mode, u32 ZWriteDis, float
         case 2: if (invW != *zb) return; break;
         // less or equal
         case 3: if (invW > *zb) {
-            if (render_mode == RM_TRANSLUCENT && !ISP_FEED_CFG.pre_sort) {
+            if (render_mode == RM_TRANSLUCENT && !refsw_pre_sort()) {
                 MoreToDraw = true;
             }
             return;
@@ -1303,7 +1365,7 @@ void PixelFlush_isp(RenderMode render_mode, u32 depth_mode, u32 ZWriteDis, float
         // Layer Peeling. zb2 holds the reference depth, zb is used to find closest to reference
         case RM_TRANSLUCENT:
         {
-            if (!ISP_FEED_CFG.pre_sort) {
+            if (!refsw_pre_sort()) {
                 if (invW < *zb2)
                     return;
 

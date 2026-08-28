@@ -38,9 +38,24 @@ struct RefswParams {
  * clears them, from the background parameter and depth. */
 void refsw_begin_tile(int left, int top, uint32_t bgTag, float bgDepth);
 
+/* Draw the translucent list in the order it is submitted, blending as it goes,
+ * instead of depth peeling it. For the games whose translucency the TA sorts
+ * automatically, Flycast sorts the triangles itself and every GPU backend
+ * draws them this way; peeling hundreds of coplanar sprites cannot converge.
+ */
+void refsw_set_sorted(int on);
+
+/* The PVR's user clip for the polygons that follow: mode 0 off, 1 draw only
+ * OUTSIDE the rectangle, 2 draw only inside it. Screen pixels, half-open on
+ * the right and bottom. */
+void refsw_set_clip(int mode, int x0, int y0, int x1, int y1);
+
 /* Rasterise one triangle into the current tile. `params` is a RefswParams;
  * v1..v3 are Flycast Vertex pointers, which refsw reads as its own. */
-void refsw_triangle(int mode, const RefswParams *params, uint32_t tag,
+/* `key` identifies the triangle within this tile - list, polygon, position in
+ * the strip - and must be the SAME every time the triangle is submitted, so
+ * that its tag is stable across the peel passes. */
+void refsw_triangle(int mode, const RefswParams *params, uint64_t key,
                     const void *v1, const void *v2, const void *v3,
                     int left, int top);
 
