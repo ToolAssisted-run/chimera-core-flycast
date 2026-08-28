@@ -62,10 +62,13 @@ static int g_frameHeight = 480;
  * way the hardware keeps them in the chip. */
 /* per-frame, for the trace: how many triangles each list rasterised and how
  * much of the last tile each left lit */
+static bool ChimeraGSTraceRenderer();
 static unsigned g_passTriangles[3];
 static unsigned g_passLit[3];
 static bool g_trace;
 static unsigned g_texturedPolys;
+static unsigned g_pixelFormats[8];
+static unsigned g_stride, g_twiddled, g_vq, g_mipmapped;
 
 /* The ISP word refsw expects, which is not quite the one Flycast hands over.
  *
@@ -110,6 +113,12 @@ static inline bool TouchesTile(const Vertex& a, const Vertex& b, const Vertex& c
 		return false;
 	const float maxY = std::max(a.y, std::max(b.y, c.y));
 	return maxY >= (float)top;
+}
+
+static bool ChimeraGSTraceRenderer()
+{
+	static const bool on = getenv("CHIMERA_REFSW_TRACE") != nullptr;
+	return on;
 }
 
 static void RenderTile(int tileX, int tileY, const rend_context& rc)
@@ -177,7 +186,21 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 			}
 
 			if (g_trace && pp.pcw.Texture)
+			{
 				g_texturedPolys++;
+				/* 0=1555 1=565 2=4444 3=YUV422 4=bump 5=PAL4 6=PAL8 */
+				g_pixelFormats[pp.tcw.PixelFmt & 7]++;
+				if (pp.tcw.StrideSel) g_stride++;
+				if (!pp.tcw.ScanOrder) g_twiddled++;
+				if (pp.tcw.VQ_Comp) g_vq++;
+				if (pp.tcw.MipMapped) g_mipmapped++;
+				if (g_texturedPolys <= 5 && sub.left == 0 && sub.top == 0)
+					fprintf(stderr, "        texture %u: addr %08x %ux%u fmt %u twiddled %u stride %u pal %u\n",
+						g_texturedPolys, pp.tcw.TexAddr << 3,
+						8u << pp.tsp.TexU, 8u << pp.tsp.TexV,
+						(unsigned)pp.tcw.PixelFmt, (unsigned)!pp.tcw.ScanOrder,
+						(unsigned)pp.tcw.StrideSel, (unsigned)pp.tcw.PalSelect);
+			}
 
 			RefswParams params;
 			params.isp = IspForRefsw(pp);
@@ -308,6 +331,8 @@ struct refswrend : Renderer
 
 		g_passTriangles[0] = g_passTriangles[1] = g_passTriangles[2] = 0;
 		g_texturedPolys = 0;
+		memset(g_pixelFormats, 0, sizeof(g_pixelFormats));
+		g_stride = g_twiddled = g_vq = g_mipmapped = 0;
 
 		const int tilesX = (g_frameWidth + 31) / 32;
 		const int tilesY = (g_frameHeight + 31) / 32;
@@ -322,13 +347,31 @@ struct refswrend : Renderer
 				if (g_frame[i] & 0x00FFFFFF)
 					lit++;
 			fprintf(stderr, "refsw %d: %dx%d op=%zu pt=%zu tr=%zu mvo=%zu verts=%zu idx=%zu lit=%zu"
-				" tris(op=%u pt=%u tr=%u) textured=%u\n",
+				" tris(op=%u pt=%u tr=%u) textured=%u fmt(1555=%u 565=%u 4444=%u yuv=%u bump=%u pal4=%u pal8=%u)\n",
 				traceFrame++, g_frameWidth, g_frameHeight,
 				rendContext->global_param_op.size(), rendContext->global_param_pt.size(),
 				rendContext->global_param_tr.size(), rendContext->global_param_mvo.size(),
 				rendContext->verts.size(), rendContext->idx.size(), lit,
 				g_passTriangles[0], g_passTriangles[1], g_passTriangles[2],
-				g_texturedPolys / 300);
+				g_texturedPolys / 300,
+				g_pixelFormats[0] / 300, g_pixelFormats[1] / 300, g_pixelFormats[2] / 300,
+				g_pixelFormats[3] / 300, g_pixelFormats[4] / 300, g_pixelFormats[5] / 300,
+				g_pixelFormats[6] / 300);
+
+			/* What a paletted texture is looked up in. A palette of all zeros
+			 * would explain a game of paletted sprites coming out as mush. */
+			unsigned nonzero = 0;
+			for (int i = 0; i < 1024; i++)
+				if (PALETTE_RAM[i] != 0)
+					nonzero++;
+			fprintf(stderr, "        registers: TEXT_CONTROL=%08x (stride unit %u), PAL_RAM_CTRL=%u, SCALER_CTL=%08x, FB_R_CTRL=%08x\n",
+				(unsigned)TEXT_CONTROL, (unsigned)((TEXT_CONTROL & 31) * 32),
+				(unsigned)PAL_RAM_CTRL, (unsigned)SCALER_CTL.full, (unsigned)FB_R_CTRL.full);
+			fprintf(stderr, "        layout: stride=%u twiddled=%u vq=%u mipmapped=%u (of %u textured)\n",
+				g_stride / 300, g_twiddled / 300, g_vq / 300, g_mipmapped / 300, g_texturedPolys / 300);
+			fprintf(stderr, "        palette: %u of 1024 entries set, first four %08x %08x %08x %08x, fmt %u\n",
+				nonzero, PALETTE_RAM[0], PALETTE_RAM[1], PALETTE_RAM[2], PALETTE_RAM[3],
+				(unsigned)PAL_RAM_CTRL);
 		}
 
 		return true;
@@ -336,6 +379,9 @@ struct refswrend : Renderer
 
 	void RenderFramebuffer(const FramebufferInfo& info) override
 	{
+		if (ChimeraGSTraceRenderer())
+			fprintf(stderr, "refsw: RenderFramebuffer %dx%d (the game is showing VRAM, not a display list)\n",
+				info.fb_r_size.fb_x_size + 1, info.fb_r_size.fb_y_size + 1);
 		rendContext = nullptr;
 	}
 

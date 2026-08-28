@@ -241,7 +241,11 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 		else if (o->exercise)
 		{
 			gate_exercise_pad(f, buttons);
-			if (o->exercisePad >= 2 && o->exercisePad <= 8)
+			// a second pad only exists on a wire wide enough to hold one;
+			// this core declares a single controller, so the block below is
+			// unreachable here and the bound says so out loud
+			if (o->exercisePad >= 2 && o->exercisePad <= 8
+				&& 2 + (o->exercisePad - 1) * 12 + 12 <= GATE_BTN_COUNT)
 			{
 				uint8_t extra[GATE_BTN_COUNT];
 				memset(extra, 0, sizeof extra);

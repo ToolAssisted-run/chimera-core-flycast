@@ -56,7 +56,7 @@ defs = [
   # patches/0003 selects the software renderer this core supplies; NO_REND
   # stays defined so nothing tries to build a GPU backend.
   '-DCHIMERA_SOFTWARE_RENDERER',
-  '-DNO_REND',
+  '-DNO_REND', '-DCHIMERA_NO_PAGE_PROTECTION',
   '-DNO_NETWORK_LOGGER',   # patches/0001: the log listener that opens a socket
   # No recompilers, chosen the way upstream chooses them: FEAT_* are build-time
   # decisions, not settings, so pinning DYNAREC_NONE is what actually selects

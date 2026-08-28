@@ -1,0 +1,116 @@
+diff --git a/core/hw/pvr/pvr_mem.cpp b/core/hw/pvr/pvr_mem.cpp
+index 4b809d6..8688e03 100644
+--- a/core/hw/pvr/pvr_mem.cpp
++++ b/core/hw/pvr/pvr_mem.cpp
+@@ -5,6 +5,29 @@
+ 	Most of this was hacked together when i needed support for YUV-dma for thps2 ;)
+ */
+ #include "pvr_mem.h"
++
++// chimera: a texture in VRAM that the game overwrites must stop being used.
++//
++// Upstream learns that by PROTECTING the texture's pages and catching the
++// fault (core/linux/common.cpp answers SIGSEGV with VramLockedWrite). A
++// sandboxed guest has no page protection and no signal handler, so it never
++// finds out: the first version of this core drew a game's first textures
++// correctly and then showed them for the rest of the run, which in Street
++// Fighter Zero 3 - a game of paletted sprites reusing one region of VRAM -
++// looked like the picture had been through a shredder.
++//
++// So the write path says so itself. The test is one comparison on a page that
++// nothing is watching, which is nearly all of them.
++#ifdef CHIMERA_NO_PAGE_PROTECTION
++#include "rend/TexCache.h"
++static inline void chimera_vram_written(u32 offset)
++{
++	if (VramLockedPage(offset))
++		VramLockedWriteOffset(offset);
++}
++#else
++#define chimera_vram_written(offset) ((void)0)
++#endif
+ #include "Renderer_if.h"
+ #include "ta.h"
+ #include "hw/holly/sb.h"
+@@ -101,6 +124,7 @@ static void YUV_ConvertMacroBlock(const u8 *datap)
+ 	TA_YUV_TEX_CNT++;
+ 
+ 	YUV_Block384(datap, &vram[YUV_dest]);
++	chimera_vram_written(YUV_dest);
+ 
+ 	YUV_dest+=32;
+ 
+@@ -231,6 +255,7 @@ void DYNACALL pvr_write32p(u32 addr, T data)
+ 		fb_dirty = true;
+ 
+ 	*(T *)&vram[pvr_map32(addr)] = data;
++	chimera_vram_written(pvr_map32(addr));
+ }
+ template void pvr_write32p<u8, false>(u32 addr, u8 data);
+ template void pvr_write32p<u8, true>(u32 addr, u8 data);
+@@ -270,6 +295,7 @@ void DYNACALL TAWriteSQ(u32 address, const SQBuffer *sqb)
+ 		if (path64b)
+ 		{
+ 			// 64b path
++			chimera_vram_written(address_w & VRAM_MASK);
+ 			SQBuffer *dest = (SQBuffer *)&vram[address_w & VRAM_MASK];
+ 			*dest = *sq;
+ 		}
+@@ -324,9 +350,14 @@ void DYNACALL pvr_write_area4(u32 addr, T data)
+ {
+ 	bool access32 = (upper ? SB_LMMODE1 : SB_LMMODE0) == 1;
+ 	if (access32)
++	{
+ 		pvr_write32p(addr, data);
++	}
+ 	else
++	{
+ 		*(T*)&vram[addr & VRAM_MASK] = data;
++		chimera_vram_written(addr & VRAM_MASK);
++	}
+ }
+ template void pvr_write_area4<u8, false>(u32 addr, u8 data);
+ template void pvr_write_area4<u16, false>(u32 addr, u16 data);
+diff --git a/core/rend/TexCache.cpp b/core/rend/TexCache.cpp
+index fbf4c58..e135111 100644
+--- a/core/rend/TexCache.cpp
++++ b/core/rend/TexCache.cpp
+@@ -79,6 +79,23 @@ static void vramlock_list_add(vram_block* block)
+  
+ static std::mutex vramlist_lock;
+ 
++#ifdef CHIMERA_NO_PAGE_PROTECTION
++// chimera: is any texture watching this page?
++//
++// Upstream never needs to ask: it PROTECTS the page and lets the fault handler
++// tell it. A sandboxed guest can neither protect a page nor take a fault, so
++// the write path asks instead - on every VRAM write, which is why this has to
++// be cheap. It reads the list without the mutex, which is safe here for the
++// reason the whole sandbox is single-threaded: there is no other thread to
++// race with.
++bool VramLockedPage(size_t offset)
++{
++	if (offset >= VRAM_SIZE || VramLocks == nullptr)
++		return false;
++	return !VramLocks[offset / PAGE_SIZE].empty();
++}
++#endif
++
+ bool VramLockedWriteOffset(size_t offset)
+ {
+ 	if (offset >= VRAM_SIZE || VramLocks == nullptr)
+diff --git a/core/rend/TexCache.h b/core/rend/TexCache.h
+index 65f5ed9..7eb4687 100644
+--- a/core/rend/TexCache.h
++++ b/core/rend/TexCache.h
+@@ -41,6 +41,10 @@ struct vram_block
+ };
+ 
+ bool VramLockedWriteOffset(size_t offset);
++#ifdef CHIMERA_NO_PAGE_PROTECTION
++/// chimera: cheap test for the write path, which has to ask on every write
++bool VramLockedPage(size_t offset);
++#endif
+ bool VramLockedWrite(u8* address);
+ 
+ void UpscalexBRZ(int factor, u32* source, u32* dest, int width, int height, bool has_alpha);
