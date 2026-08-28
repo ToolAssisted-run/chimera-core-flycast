@@ -22,3 +22,7 @@ tests/roms/*.zip
 
 # the sandbox writes this when a guest faults
 minibox-diag.log
+
+# The gate writes its logs, dumps and configs here; all of it is regenerable by
+# running the gate, and none of it is a fixture.
+waterbox/tests/work/

@@ -1,9 +1,0 @@
-frames=300
-vsync=60000/1001
-videoHash=1822eb79c18d05c3
-audioHash=14650fb0739d0383
-lagFrames=0
-domain[System RAM]=9f3dd796eb6e33b7
-domain[VRAM]=572fce00f99d0383
-domain[Sound RAM]=e9d52d92a357275d
-domain[Flash]=cb65573a21a30b2d

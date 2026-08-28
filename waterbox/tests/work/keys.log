@@ -1,9 +1,0 @@
-parsing command-line flags: --headless --config=/home/jaffar/chimera-core-flycast/waterbox/tests/work/config.keys.ini --core=/home/jaffar/chimera/build/Cores/flycast.chimeraCore --lua=/home/jaffar/chimera-core-flycast/waterbox/tests/frontend-ram.lua /home/jaffar/chimera-core-flycast/tests/roms/padread.elf
-Gtk not found (missing LD_LIBRARY_PATH to libgtk-x11-2.0.so.0?), using built-in colorscheme
-libEGL warning: DRI3 error: Could not get DRI3 device
-libEGL warning: Ensure your X server supports DRI3 to get accelerated rendering
-Using SDL2 for host input (keyboard + gamepads)
-[ALSOFT] (EE) Could not query RTKit: No such file or directory (2)
-Chimera Commit 7a4b61502
-[waterbox] booting Flycast
-[Lua Console] loaded script /home/jaffar/chimera-core-flycast/waterbox/tests/frontend-ram.lua

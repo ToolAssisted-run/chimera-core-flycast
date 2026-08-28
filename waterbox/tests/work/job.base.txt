@@ -1,4 +1,0 @@
-frames=300
-out=/home/jaffar/chimera-core-flycast/waterbox/tests/work/base.ram.bin
-meta=/home/jaffar/chimera-core-flycast/waterbox/tests/work/base.meta.txt
-shot=/home/jaffar/chimera-core-flycast/waterbox/tests/work/base.png
