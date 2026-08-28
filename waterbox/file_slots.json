@@ -14,6 +14,16 @@
         "elf"
       ],
       "help": "The GD-ROM image. A .gdi index (with its track files beside it), a .cdi, a .chd, or a .cue - and a naked .elf, which the HLE bios boots straight from memory the way homebrew is usually tested."
+    },
+    {
+      "id": "savedata",
+      "title": "Save data",
+      "min": 0,
+      "max": 2,
+      "formats": [
+        "bin"
+      ],
+      "help": "What the machine's memory cards start with already on them. These are the files Emulator > Export Save Data... writes, put back under the same names - vmu_A1.bin and vmu_A2.bin, the two cards in the first controller - so a run can continue from where another left off. Each is mounted read-only and pinned by hash, and the movie cites it, so a movie that starts from a saved game is as reproducible as one that starts from a blank card. Leave it empty and the machine formats fresh cards."
     }
   ]
 }

@@ -239,6 +239,28 @@ ECL_EXPORT int Init(void)
 {
 	g_loadError[0] = '\0';
 
+	/* Save data the project brought is mounted under its own name and the
+	 * machine picks it up as it builds each card (chimera_register_vmu). What
+	 * happens here is a REFUSAL: a card named something the machine never opens
+	 * would be carried by the project, pinned by the movie, and silently
+	 * ignored, which is worse than not booting. */
+	{
+		char entry[512];
+		const int32_t saves = wbx_slot_count("savedata");
+		for (int32_t i = 0; i < saves; i++)
+		{
+			if (wbx_slot_name("savedata", i, entry, sizeof(entry)) == nullptr)
+				continue;
+			if (strncmp(entry, "vmu_", 4) != 0)
+			{
+				snprintf(g_loadError, sizeof(g_loadError),
+					"this machine does not read save data called \"%s\". Its cards are "
+					"vmu_A1.bin and vmu_A2.bin - the names Export Save Data writes.", entry);
+				return 0;
+			}
+		}
+	}
+
 	/* the disc: the project slot's file, else the plain mount */
 	char name[512];
 	const char *file = "disc";
@@ -509,6 +531,26 @@ extern "C" bool chimera_register_vmu(const char *port, uint8_t *flash, unsigned 
 	g_vmus[g_vmuCount].flash = flash;
 	g_vmus[g_vmuCount].size = size;
 	g_vmuCount++;
+
+	/* What the project starts with already saved on this card.
+	 *
+	 * A card the frontend mounted under the name this one exports is read
+	 * straight into the flash the machine is about to use. It happens HERE
+	 * because here is where the machine is being built - during Init, before
+	 * seal - so the contents land in the sealed baseline and a savestate
+	 * carries only what the game has written since, not the card.
+	 *
+	 * Upstream would have opened its own file for this; a sandboxed core has
+	 * no save directory, and the project is where saves come from. Nothing
+	 * mounted means a fresh card, which Flycast formats for itself. */
+	if (FILE *f = fopen(g_vmus[g_vmuCount - 1].name, "rb"))
+	{
+		const size_t got = fread(flash, 1, size, f);
+		fclose(f);
+		if (got != size)
+			fprintf(stderr, "chimera: %s is %zu bytes, not %u; the rest is left blank\n",
+				g_vmus[g_vmuCount - 1].name, got, size);
+	}
 	return true;
 }
 

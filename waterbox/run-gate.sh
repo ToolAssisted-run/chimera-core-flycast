@@ -247,6 +247,33 @@ sys.exit(0)
 	else
 		report "savedata:vmu" FAIL "no formatted VMU came out of the save-data channel"
 	fi
+
+	# ...and back in. A project supplies save data by mounting it under the name
+	# the export wrote, so a card marked with bytes the machine could not have
+	# written must reach the machine and come back carrying them. Without this,
+	# the import side is a slot declaration nobody proved.
+	seed="$work/vmu-seed"
+	back="$work/vmu-back"
+	mkdir -p "$seed" "$back"
+	cp "$wd"/* "$seed/" 2>/dev/null
+	if [ -f "$sd/vmu_A1.bin" ] && python3 - "$sd/vmu_A1.bin" "$seed/vmu_A1.bin" <<'PYSEED'
+import sys
+d = bytearray(open(sys.argv[1], 'rb').read())
+d[0x40:0x50] = b'CHIMERA-SEED-TST'
+open(sys.argv[2], 'wb').write(bytes(d))
+PYSEED
+	then
+		"$nat/run-native" "$seed" --frames 30 --savedata-out "$back" >/dev/null 2>&1
+		if [ ! -f "$back/vmu_A1.bin" ]; then
+			report "savedata:seeded" FAIL "nothing came back with a card mounted"
+		elif ! cmp -s "$seed/vmu_A1.bin" "$back/vmu_A1.bin"; then
+			report "savedata:seeded" FAIL "the mounted card is not what came back"
+		else
+			report "savedata:seeded" PASS "a card the project supplied reached the machine and returned unchanged"
+		fi
+	else
+		report "savedata:seeded" FAIL "could not make a marked card to mount"
+	fi
 fi
 
 # The Stella lesson: the native reference is the only place a real clock and
