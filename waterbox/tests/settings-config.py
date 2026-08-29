@@ -9,7 +9,7 @@ import json
 import sys
 
 cfg = json.load(open(sys.argv[1]))
-cfg.setdefault("CoreSettings", {})["BizHawk.Emulation.Common.Waterbox.WaterboxCore"] = {
+cfg.setdefault("CoreSettings", {})["Chimera.Emulation.Common.Waterbox.WaterboxCore"] = {
     "Values": json.loads(sys.argv[3])
 }
 if len(sys.argv) > 4:
