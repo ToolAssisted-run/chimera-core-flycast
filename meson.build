@@ -90,6 +90,8 @@ inc = include_directories(
   fc / 'core/deps/nowide/include',
   'waterbox',
   'waterbox/refsw',
+  # the GPU bridge's shared contract and its generated opcodes
+  mb / 'source/gl',
 )
 
 # A guest Mesa turns on Flycast's own OpenGL renderer: see
@@ -134,6 +136,27 @@ driver_sources = files(
 if guest_gl
   # the OpenGL context that is not a GPU: Mesa softpipe, inside the sandbox
   driver_sources += files('waterbox/gl-osmesa.cpp')
+
+  # The GPU bridge's guest half: a wrapper per GL entry point that hands the
+  # call to the host, and the context object Flycast asks for. Compiled in
+  # whenever the GL renderer is, because it costs nothing until a host offers
+  # a callback AND a project asks for it - otherwise the softpipe draws.
+  # Generated from the SHARED table in miniBox, not from a list of our own:
+  # opcodes are indices into that master list, so what this core means by an
+  # opcode is what every other core and the frontend's host half mean.
+  # (mb / 'source/gl/README.md' says why that has to be true.)
+  gl_bridge_guest = custom_target('gl-bridge-guest',
+    output: ['gl-bridge-guest.cpp', 'gl-bridge-ops.h', 'gl-bridge-host.inc'],
+    input: files('waterbox/gl-entry-points.txt'),
+    command: [find_program('python3'), mb / 'source/gl/gen-gl-bridge.py',
+      meson.current_source_dir() / fc / 'core/deps/glad/include/glad/gl.h',
+      mb / 'source/gl/gl-entry-points.txt',
+      '@OUTDIR@', '--only', '@INPUT@'])
+
+  driver_sources += files('waterbox/gl-bridged.cpp')
+  gl_bridge_src = [gl_bridge_guest[0]]
+else
+  gl_bridge_src = []
 endif
 
 if meson.is_cross_build()
@@ -160,7 +183,7 @@ if meson.is_cross_build()
       '-Wl,-u,pthread_mutexattr_destroy']
   endif
 
-  executable('core', core_sources + driver_sources,
+  executable('core', core_sources + driver_sources + gl_bridge_src,
     name_suffix: 'wbx',
     include_directories: inc,
     link_with: [deps_lib, refsw_lib],
@@ -180,7 +203,7 @@ else
   dl = meson.get_compiler('c').find_library('dl', required: false)
   m = meson.get_compiler('c').find_library('m', required: false)
 
-  executable('run-native', core_sources + driver_sources + files('waterbox/run-native.c'),
+  executable('run-native', core_sources + driver_sources + gl_bridge_src + files('waterbox/run-native.c'),
     include_directories: [include_directories('waterbox/native-shim'), inc],
     c_args: ['-I' + mb / 'source/guest/include', '-I' + mb / 'extern/jsmn'],
     cpp_args: ['-I' + mb / 'source/guest/include', '-I' + mb / 'extern/jsmn'],

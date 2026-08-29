@@ -42,8 +42,17 @@
  * inherits that function's C linkage, and these are defined as C++ in
  * waterbox/gl-osmesa.cpp. That mismatch has cost this project an afternoon
  * twice now. */
-bool chimera_gl_start();
-bool chimera_gl_available();
+bool chimera_gl_start_osmesa();
+bool chimera_gl_start_bridged();
+void chimera_gl_bridge_offer(uint64_t (*bridge)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t));
+bool chimera_gl_bridge_offered();
+
+/* Whether an OpenGL renderer came up, either way. Asked by Renderer_if.cpp
+ * when it picks a renderer and by the ABI when it goes looking for the
+ * picture. Lives here rather than beside either context because only this file
+ * knows which one was asked for. */
+static bool g_glUp;
+bool chimera_gl_available() { return g_glUp; }
 #endif
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_if.h"
@@ -330,9 +339,26 @@ ECL_EXPORT int Init(void)
 		 * bringing Mesa up first moves every allocation Flycast then makes,
 		 * and addrspace::initMappings wrote off the end of the guest. */
 		{
-			static const char *const renderers[] = { "software", "opengl" };
-			if (SettingIndex("renderer", renderers, 2, 0) == 1 && !chimera_gl_start())
-				fprintf(stderr, "chimera: OpenGL would not start, drawing in software\n");
+			static const char *const renderers[] = { "software", "opengl", "opengl-hw" };
+			const int choice = SettingIndex("renderer", renderers, 3, 0);
+			if (choice == 2 && chimera_gl_bridge_offered())
+			{
+				/* "opengl-hw": the same renderer, drawing on a GPU outside the
+				 * sandbox. Not deterministic, and asked for explicitly. */
+				g_glUp = chimera_gl_start_bridged();
+				if (!g_glUp)
+					fprintf(stderr, "chimera: the GPU bridge would not start, falling back\n");
+			}
+			if (!g_glUp && choice >= 1)
+			{
+				/* Either "opengl", or "opengl-hw" on a Chimera that offered no
+				 * bridge - which is any build without one, and any machine
+				 * whose driver would not give a context. The softpipe draws,
+				 * the picture is right, and the run stays deterministic. */
+				g_glUp = chimera_gl_start_osmesa();
+				if (!g_glUp)
+					fprintf(stderr, "chimera: OpenGL would not start, drawing in software\n");
+			}
 		}
 #endif
 
@@ -572,5 +598,16 @@ ECL_EXPORT const uint8_t *GetSaveDataFileBuffer(int32_t i)
 {
 	return (i >= 0 && i < g_vmuCount) ? g_vmus[i].flash : nullptr;
 }
+
+#if defined(CHIMERA_GUEST_GL)
+/* A host with a real GL context offers it here, BEFORE Init, because Init is
+ * where the renderer is chosen. Taking the offer is a separate decision made
+ * there, from the project's renderer setting: a core handed a GPU that nobody
+ * asked for still draws in software. */
+ECL_EXPORT void SetGpuBridge(uint64_t addr)
+{
+	chimera_gl_bridge_offer((uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t))addr);
+}
+#endif
 
 } /* extern "C" */

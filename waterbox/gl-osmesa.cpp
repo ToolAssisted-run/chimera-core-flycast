@@ -133,16 +133,12 @@ ChimeraGLContext *g_context;
 
 } // namespace
 
-/* Whether the OpenGL renderer is up, asked by Renderer_if.cpp when it picks a
- * renderer and by the ABI when it goes looking for the picture. */
-bool chimera_gl_available()
-{
-	return g_context != nullptr;
-}
-
-/* Brings OpenGL up. Returns false if Mesa will not start, and then the
- * software rasteriser draws instead - the picture is worse but there is one. */
-bool chimera_gl_start()
+/* Brings OpenGL up on the softpipe. Returns false if Mesa will not start, and
+ * then the software rasteriser draws instead - the picture is worse but there
+ * is one. (The other way to have OpenGL here is waterbox/gl-bridged.cpp, on a
+ * GPU outside the sandbox; whether either came up is chimera_gl_available, in
+ * cinterface.cpp, because only that file knows which was asked for.) */
+bool chimera_gl_start_osmesa()
 {
 	if (g_context != nullptr)
 		return true;
