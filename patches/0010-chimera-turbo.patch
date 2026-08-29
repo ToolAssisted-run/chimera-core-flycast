@@ -1,0 +1,29 @@
+diff --git a/core/rend/gles/gles.cpp b/core/rend/gles/gles.cpp
+--- a/core/rend/gles/gles.cpp
++++ b/core/rend/gles/gles.cpp
+@@ -1319,8 +1319,25 @@
+ 	gles_term();
+ }
+ 
++/* chimera: 0 while the frontend is fast-forwarding; defined by the ABI layer
++   (waterbox/cinterface.cpp) in memory the savestate does not cover, because it
++   is the frontend's policy for the moment and not part of the machine. */
++extern "C" int chimera_render_enabled;
++
+ bool OpenGLRenderer::Render()
+ {
++	/* chimera: turbo. A pass that renders to TEXTURE is not a picture - it is
++	   written back into video memory and the game reads it - so only the pass
++	   that would have reached a screen is skipped. Everything the SH4 can see
++	   has already happened by now: the TA has parsed the list and Process has
++	   returned. */
++	if (!chimera_render_enabled && !gl.rendContext->isRTT)
++	{
++		if (!config::EmulateFramebuffer)
++			frameRendered = true;
++		return true;
++	}
++
+ 	saveCurrentFramebuffer();
+ 	renderFrame(gl.rendContext->framebufferWidth, gl.rendContext->framebufferHeight);
+ 	if (gl.rendContext->isRTT) {

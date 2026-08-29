@@ -82,6 +82,18 @@ static int g_nsamples;
 static int g_inputRead;
 static bool g_loaded;
 
+/* Turbo. Both renderers read this: the software one (waterbox/refsw-renderer.cpp)
+ * leaves its tiles unrasterised, and Flycast's own OpenGL one (patches/0010)
+ * skips the pass that would have reached a screen. A render-to-texture pass is
+ * never skipped by either, because that one writes back into video memory and
+ * the game reads it.
+ *
+ * extern "C" and not static because the patched upstream file names it.
+ * ECL_INVISIBLE because it is the frontend's policy for the moment, not part of
+ * the machine: a state saved while fast-forwarding must not put the machine
+ * back into it when it is loaded to be looked at. */
+extern "C" { ECL_INVISIBLE int chimera_render_enabled = 1; }
+
 /* the wire: one Dreamcast controller. Order is the frontend's button order and
  * must match waterbox.config. */
 enum {
@@ -460,6 +472,12 @@ ECL_EXPORT uint32_t *GetVideoBgra(void)
 	memcpy(g_video, frame, (size_t)w * h * sizeof(uint32_t));
 	return g_video;
 }
+
+/* Turbo (optional guest ABI group): while off the core must produce no picture
+ * and must otherwise be exactly the machine it would have been. run-gate.sh's
+ * turbo leg is the proof - N undrawn frames plus one drawn one come out byte for
+ * byte the same machine, and the same picture, as N+1 drawn ones. */
+ECL_EXPORT void SetRenderingEnabled(int on) { chimera_render_enabled = on != 0; }
 
 ECL_EXPORT int GetVideoWidth(void) { return g_videoWidth; }
 ECL_EXPORT int GetVideoHeight(void) { return g_videoHeight; }

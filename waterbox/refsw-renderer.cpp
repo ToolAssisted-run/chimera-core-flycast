@@ -50,6 +50,9 @@ extern void chimera_refsw_decode(u32 tsp, u32 tcw, u32 *out, int w, int h);
 /* refsw reads video memory directly for its textures. */
 u8 *emu_vram;
 
+/* Turbo, from the ABI layer (cinterface.cpp). */
+extern "C" int chimera_render_enabled;
+
 /* Flycast's side of the agreement in bridge.h, checked here so that a change
  * to EITHER project's Vertex stops the build. */
 static_assert(sizeof(Vertex) == 48 || true, "Vertex size is asserted against refsw at runtime");
@@ -560,6 +563,14 @@ struct refswrend : Renderer
 
 	bool Render() override
 	{
+		/* Turbo: nobody is going to look at this frame. Everything the SH4 can
+		 * see has already happened - the TA parsed the list in Process, and
+		 * this renderer never touches video memory (a render-to-texture pass,
+		 * which does, is declined below and always was). So the tiles can go
+		 * unrasterised and the machine cannot tell. */
+		if (!chimera_render_enabled)
+			return true;
+
 		/* Set CHIMERA_REFSW_TRACE to watch what arrives: how many polygons of
 		 * each list, how many vertices, and how much of the picture came out
 		 * non-black. It is the difference between "the game draws nothing" and

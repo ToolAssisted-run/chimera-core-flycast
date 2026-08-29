@@ -33,6 +33,10 @@ done
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 digests() { grep -E '^(frames|vsync|videoHash|audioHash|lagFrames|domain\[)'; }
+# What a turbo run can be held to: everything except the whole-run video hash,
+# which a run that skipped the first half cannot possibly match - the second
+# half it did draw is compared instead.
+turboDigests() { grep -E '^(frames|vsync|tailVideoHash|audioHash|lagFrames|domain\[)'; }
 
 ok=0
 failed=0
@@ -84,6 +88,20 @@ for t in "${tests[@]}"; do
 	# The sandbox snapshots the whole guest, so a savestate here is the whole
 	# machine by construction; what this checks is that taking one every frame
 	# and restoring it changes nothing.
+	# Turbo: the core's drawing switched off for the first half of the run and
+	# back on for the second. The machine, the sound, the lag count and every
+	# picture of that second half must be what they would have been.
+	"$nat/run-wbx" "$gst/core.wbx" "$wd" --frames "$frames" 2>/dev/null | turboDigests > "$work/tnorm.txt"
+	if "$nat/run-wbx" "$gst/core.wbx" "$wd" --frames "$frames" --turbo 2>/dev/null | turboDigests > "$work/turbo.txt"; then
+		if cmp -s "$work/tnorm.txt" "$work/turbo.txt"; then
+			report "$name:turbo" PASS "$frames frames, half of them undrawn, same machine and same pictures"
+		else
+			report "$name:turbo" FAIL "$(diff "$work/tnorm.txt" "$work/turbo.txt" | tr '\n' ' ' | head -c 120)"
+		fi
+	else
+		report "$name:turbo" FAIL "turbo runner error"
+	fi
+
 	if ! "$nat/run-wbx" "$gst/core.wbx" "$wd" --frames "$frames" --rerecord 2>/dev/null | digests > "$work/rr.txt"; then
 		report "$name:savestate" FAIL "rerecord run failed"
 	elif cmp -s "$work/box.txt" "$work/rr.txt"; then

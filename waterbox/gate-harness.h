@@ -45,6 +45,8 @@ struct gate_core
 	const uint8_t *(*savedata_buffer)(int32_t i);
 	/* optional per-frame hook (the rerecord leg); may be NULL */
 	void (*pre_frame)(void);
+	/* optional: turn the core's drawing on and off (the turbo leg); may be NULL */
+	void (*set_rendering)(int on);
 };
 
 struct gate_opts
@@ -61,6 +63,8 @@ struct gate_opts
 	const char *savedataDir;    /* optional: write every savedata export here after the run */
 	int exercisePad;      /* also drive this pad number (2..8) with the exercise, or 0 */
 	int wiggleAxes;       /* nonzero: drive every axis with a deterministic wander */
+	int turbo;            /* nonzero: draw nothing for the first half of the run */
+	long turboSettle;     /* frames to let the picture settle before hashing it */
 };
 
 static uint64_t gate_fnv(uint64_t h, const void *p, size_t n)
@@ -222,6 +226,14 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 		frames = sol.count;
 
 	uint64_t vh = 0, ah = 0;
+	/* the second half of the run, hashed separately: see the turbo hook. The
+	 * settle window is for a machine whose picture is built from more than
+	 * one frame - an interlaced display weaves two fields - where the first
+	 * picture after drawing resumes is half made of a field nobody drew.
+	 * Exactly what a savestate load does, and it converges as fast. */
+	const long tail = frames / 2;
+	const long hashFrom = tail + o->turboSettle;
+	uint64_t th = 0;
 	long lag = 0;
 	uint8_t buttons[GATE_BTN_COUNT];
 	uint8_t prev[GATE_BTN_COUNT];
@@ -271,6 +283,14 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 				buttons[k] = (w >> (48 + (k - 98))) & 1;
 		}
 
+		/* turbo: draw nothing for the first half of the run, then draw the
+		 * second half normally. The second half's pictures are what the
+		 * turbo leg compares - one final frame would not do, because a
+		 * console with a 3D chip renders when the game submits a list and
+		 * not on every frame. */
+		if (o->turbo && c->set_rendering)
+			c->set_rendering(f >= tail);
+
 		if (c->pre_frame)
 			c->pre_frame();
 
@@ -289,6 +309,12 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 		vh = gate_fnv(vh, &w, sizeof w);
 		vh = gate_fnv(vh, &h, sizeof h);
 		vh = gate_fnv(vh, video, (size_t)w * h * 4);
+		if (f >= hashFrom)
+		{
+			th = gate_fnv(th, &w, sizeof w);
+			th = gate_fnv(th, &h, sizeof h);
+			th = gate_fnv(th, video, (size_t)w * h * 4);
+		}
 		ah = gate_fnv(ah, audio, (size_t)n * 2 * sizeof(int16_t));
 		if (!c->input_was_read())
 			lag++;
@@ -299,6 +325,7 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 	printf("frames=%ld\n", frames);
 	printf("vsync=%d/%d\n", c->vsync_numerator(), c->vsync_denominator());
 	printf("videoHash=%016llx\n", (unsigned long long)vh);
+	printf("tailVideoHash=%016llx\n", (unsigned long long)th);
 	printf("audioHash=%016llx\n", (unsigned long long)ah);
 	printf("lagFrames=%ld\n", lag);
 	int nd = c->domain_count();
@@ -361,6 +388,8 @@ static int gate_parse_opts(int argc, char **argv, int first, struct gate_opts *o
 	o->savedataDir = NULL;
 	o->exercisePad = 0;
 	o->wiggleAxes = 0;
+	o->turbo = 0;
+	o->turboSettle = 0;
 	for (int i = first; i < argc; i++)
 	{
 		if (!strcmp(argv[i], "--frames") && i + 1 < argc) o->frames = strtol(argv[++i], 0, 0);
@@ -374,7 +403,9 @@ static int gate_parse_opts(int argc, char **argv, int first, struct gate_opts *o
 		else if (!strcmp(argv[i], "--savedata-out") && i + 1 < argc) o->savedataDir = argv[++i];
 		else if (!strcmp(argv[i], "--exercise-pad") && i + 1 < argc) o->exercisePad = (int)strtol(argv[++i], 0, 0);
 		else if (!strcmp(argv[i], "--wiggle-axes")) o->wiggleAxes = 1;
-		else if (!strcmp(argv[i], "--rerecord")) ; /* run-wbx's; ignored here */
+
+		else if (!strcmp(argv[i], "--turbo")) o->turbo = 1;
+		else if (!strcmp(argv[i], "--turbo-settle") && i + 1 < argc) o->turboSettle = strtol(argv[++i], 0, 0);		else if (!strcmp(argv[i], "--rerecord")) ; /* run-wbx's; ignored here */
 		else { fprintf(stderr, "unknown argument %s\n", argv[i]); return 0; }
 	}
 	return 1;

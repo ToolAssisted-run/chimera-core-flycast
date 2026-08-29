@@ -4,7 +4,7 @@
  * the guest under its basename - exactly what the frontend does with a
  * project's files, slot map and settings.
  *
- * usage: run-wbx <core.wbx> <workdir> [run-native's options] [--rerecord]
+ * usage: run-wbx <core.wbx> <workdir> [run-native's options] [--rerecord] [--turbo]
  *
  * --rerecord round-trips the WHOLE guest machine through the host's
  * save/load state around every frame; the digests must be identical.
@@ -39,6 +39,7 @@ static intptr_t mem_read(uintptr_t ud, uint8_t *d, uintptr_t n)
 typedef int (MB_GUEST_ABI *intfn)(void);
 typedef void (MB_GUEST_ABI *framefn)(uint64_t);
 typedef void (MB_GUEST_ABI *setfn)(int32_t, int32_t);
+typedef void (MB_GUEST_ABI *voidfn_i)(int);
 typedef uintptr_t (MB_GUEST_ABI *ptrfn)(void);
 typedef uintptr_t (MB_GUEST_ABI *ptrfn_i)(int);
 typedef int (MB_GUEST_ABI *intfn_i)(int);
@@ -66,6 +67,7 @@ static intfn g_GetVsyncNumerator, g_GetVsyncDenominator;
 static i32fn g_GetSaveDataFileCount;
 static ptrfn_i32 g_GetSaveDataFileName, g_GetSaveDataFileBuffer;
 static i64fn_i32 g_GetSaveDataFileSize;
+static voidfn_i g_SetRenderingEnabled;
 static int g_rerecord;
 static membuf g_state;
 
@@ -84,6 +86,7 @@ static const char *core_load_error(void) { return (const char *)g_GetLoadError()
 static void core_set_button(int32_t i, int32_t s) { g_SetButton(i, s); }
 static void core_set_axis(int32_t i, int32_t v) { g_SetAxis(i, v); }
 static void core_frame(void) { g_FrameAdvance(0); }
+static void core_set_rendering(int on) { g_SetRenderingEnabled(on); }
 static const uint32_t *core_video(int *w, int *h)
 {
 	*w = g_GetVideoWidth();
@@ -192,6 +195,7 @@ int main(int argc, char **argv)
 	g_SetButton = (setfn)proc(g_host, "SetButton");
 	g_SetAxis = (setfn)proc(g_host, "SetAxis");
 	g_FrameAdvance = (framefn)proc(g_host, "FrameAdvance");
+	g_SetRenderingEnabled = (voidfn_i)proc(g_host, "SetRenderingEnabled");
 	g_GetVideoBgra = (ptrfn)proc(g_host, "GetVideoBgra");
 	g_GetVideoWidth = (intfn)proc(g_host, "GetVideoWidth");
 	g_GetVideoHeight = (intfn)proc(g_host, "GetVideoHeight");
@@ -229,6 +233,7 @@ int main(int argc, char **argv)
 		.savedata_size = core_savedata_size,
 		.savedata_buffer = core_savedata_buffer,
 		.pre_frame = core_pre_frame,
+		.set_rendering = core_set_rendering,
 	};
 
 	/* Init runs before Seal - the loaded machine is the sealed baseline */
