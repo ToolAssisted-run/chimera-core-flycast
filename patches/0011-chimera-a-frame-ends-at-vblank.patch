@@ -1,0 +1,40 @@
+diff --git a/core/hw/pvr/Renderer_if.cpp b/core/hw/pvr/Renderer_if.cpp
+--- a/core/hw/pvr/Renderer_if.cpp
++++ b/core/hw/pvr/Renderer_if.cpp
+@@ -268,8 +268,19 @@
+ 		if (renderer->Present())
+ 		{
+ 			presented = true;
+-			if (!config::ThreadedRendering && !ggpo::active())
+-				emu.getSh4Executor()->Stop();
++			/* chimera: a frame does NOT end here. Upstream stops the SH4 when
++			   the game presents, because a desktop wants to put a picture on
++			   the screen as soon as there is one. A frame-stepped core wants
++			   the opposite: a frame of FIXED LENGTH, because the frontend
++			   plays its sound at a fixed rate and counts its frames at a
++			   fixed rate. Presenting is the game's business and it does it
++			   when it likes - once a frame in a menu, once every two or three
++			   in a fight - so a frame that ended here held 737 sample pairs
++			   sometimes and 2212 other times, and the machine was heard to
++			   change pitch and speed as the game got busier.
++
++			   rend_vblank is the boundary instead: it is the video hardware's
++			   own tick, once per displayed field whatever the game does. */
+ #ifdef LIBRETRO
+ 			retro_rend_present();
+ #endif
+@@ -636,6 +647,14 @@
+ 	check_framebuffer_write();
+ 	emu.vblank();
+ 	swapIntervalDetector.vblank();
++
++	/* chimera: and HERE a frame ends - after everything this vblank had to do,
++	   so the picture the frontend then reads is the one this field displays.
++	   Once per field, whether or not the game drew anything, which is what
++	   makes every frame the same length: one field of SH4 cycles, one field of
++	   AICA samples, one entry in a movie's input log. See present(). */
++	if (!config::ThreadedRendering && !ggpo::active())
++		emu.getSh4Executor()->Stop();
+ }
+ 
+ void check_framebuffer_write()

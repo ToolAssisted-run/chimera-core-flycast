@@ -109,6 +109,38 @@ for t in "${tests[@]}"; do
 		report "$name:audio" PASS "$produced sample pairs over $frames frames ($((produced / frames)) per frame at 44.1kHz)"
 	fi
 
+	# ...and every frame must be the SAME LENGTH as every other. The total above
+	# is blind to the distribution, and the distribution is what a frontend
+	# actually depends on: it shows frames at a fixed rate and plays their sound
+	# at a fixed rate, so a frame carrying twice the samples of its neighbour is
+	# heard as the pitch and the speed moving. Flycast ended its frame when the
+	# GAME PRESENTED, which a game does when it likes - Street Fighter Zero 3
+	# produced 737 sample pairs on some frames, 1474 on others and 2212 on the
+	# rest, all in one fight. The boundary is the video hardware's vblank now
+	# (patches/0011), which ticks whatever the game does.
+	#
+	# Held as "steady", not as "737": these programs set their own video modes
+	# and one of them runs its display at twice the usual rate. What must not
+	# happen is frames of DIFFERENT lengths within one run. Frame 0 is exempt -
+	# it runs from reset to the first vblank, which is not a whole field.
+	"$nat/run-wbx" "$gst/core.wbx" "$wd" --frames "$frames" --audio-trace "$work/$name.trace" >/dev/null 2>&1
+	steady="$(python3 - "$work/$name.trace" <<'PYSTEADY'
+import sys
+n = [int(l.split()[1]) for l in open(sys.argv[1])][1:]
+if not n:
+    print("no trace"); sys.exit()
+lo, hi = min(n), max(n)
+# one pair of slack: 44100 samples do not divide evenly into a field, so a
+# steady machine still alternates between two adjacent counts
+span = "%d" % lo if lo == hi else "%d or %d" % (lo, hi)
+print("ok " + span if hi - lo <= 1 else "%d..%d" % (lo, hi))
+PYSTEADY
+)"
+	case "$steady" in
+		ok*) report "$name:audioSteady" PASS "every frame carries ${steady#ok } sample pairs, one field's worth" ;;
+		*)   report "$name:audioSteady" FAIL "frame lengths wander over $steady sample pairs" ;;
+	esac
+
 	if [ "${noturbo:-}" = "noturbo" ]; then
 		report "$name:turbo" SKIP "this program draws one frame and stops"
 	else

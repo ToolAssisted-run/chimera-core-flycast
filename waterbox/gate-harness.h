@@ -65,6 +65,7 @@ struct gate_opts
 	int wiggleAxes;       /* nonzero: drive every axis with a deterministic wander */
 	int turbo;            /* nonzero: draw nothing for the first half of the run */
 	long turboSettle;     /* frames to let the picture settle before hashing it */
+	const char *audioTracePath; /* optional: one line per frame, "<frame> <sample pairs>" */
 };
 
 static uint64_t gate_fnv(uint64_t h, const void *p, size_t n)
@@ -243,6 +244,19 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 	uint8_t prev[GATE_BTN_COUNT];
 	memset(prev, 0, sizeof prev);
 
+	/* A frame's LENGTH, frame by frame. The total says the machine made sound;
+	 * only the distribution says the frames are the same length as each other,
+	 * which is what a fixed-rate audio device and a fixed-rate movie both
+	 * assume. A core whose frame ends when the game happens to present makes
+	 * 735 pairs on one frame and 1470 on the next, and that is heard as the
+	 * pitch moving. */
+	FILE *audioTrace = NULL;
+	if (o->audioTracePath)
+	{
+		audioTrace = fopen(o->audioTracePath, "w");
+		if (!audioTrace) { perror(o->audioTracePath); return 1; }
+	}
+
 	for (long f = 0; f < frames; f++)
 	{
 		memset(buttons, 0, sizeof buttons);
@@ -321,11 +335,16 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 		}
 		ah = gate_fnv(ah, audio, (size_t)n * 2 * sizeof(int16_t));
 		audioFrames += n;
+		if (audioTrace)
+			fprintf(audioTrace, "%ld %d\n", f, n);
 		if (!c->input_was_read())
 			lag++;
 		if (o->screenshotPath && f == frames - 1)
 			gate_write_tga(o->screenshotPath, video, w, h);
 	}
+
+	if (audioTrace)
+		fclose(audioTrace);
 
 	printf("frames=%ld\n", frames);
 	printf("vsync=%d/%d\n", c->vsync_numerator(), c->vsync_denominator());
@@ -396,6 +415,7 @@ static int gate_parse_opts(int argc, char **argv, int first, struct gate_opts *o
 	o->wiggleAxes = 0;
 	o->turbo = 0;
 	o->turboSettle = 0;
+	o->audioTracePath = NULL;
 	for (int i = first; i < argc; i++)
 	{
 		if (!strcmp(argv[i], "--frames") && i + 1 < argc) o->frames = strtol(argv[++i], 0, 0);
@@ -411,7 +431,9 @@ static int gate_parse_opts(int argc, char **argv, int first, struct gate_opts *o
 		else if (!strcmp(argv[i], "--wiggle-axes")) o->wiggleAxes = 1;
 
 		else if (!strcmp(argv[i], "--turbo")) o->turbo = 1;
-		else if (!strcmp(argv[i], "--turbo-settle") && i + 1 < argc) o->turboSettle = strtol(argv[++i], 0, 0);		else if (!strcmp(argv[i], "--rerecord")) ; /* run-wbx's; ignored here */
+		else if (!strcmp(argv[i], "--turbo-settle") && i + 1 < argc) o->turboSettle = strtol(argv[++i], 0, 0);
+		else if (!strcmp(argv[i], "--audio-trace") && i + 1 < argc) o->audioTracePath = argv[++i];
+		else if (!strcmp(argv[i], "--rerecord")) ; /* run-wbx's; ignored here */
 		else { fprintf(stderr, "unknown argument %s\n", argv[i]); return 0; }
 	}
 	return 1;

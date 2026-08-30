@@ -220,6 +220,24 @@ Chimera's firmware channel once the machine runs.
   pin from a two-file patch, and only the equivalence gate noticed. Patches are
   one file each now, and apply-patches.sh warns when one neither applies nor is
   applied.
+- **A frame that ends when the GAME says so.** Upstream stops the SH4 in
+  `present()` - the moment the renderer puts a picture up - because a desktop
+  wants the picture as soon as there is one. A frame-stepped core needs the
+  opposite: frames of equal length, because the frontend shows them at a fixed
+  rate and plays their sound at a fixed rate. Presenting is the game's
+  business. Street Fighter Zero 3 produced 737 sample pairs on some frames,
+  1474 on others and 2212 on the rest, all in one fight, and the machine was
+  heard to change pitch and speed as the game got busier; a program that never
+  renders at all (the gate's own `counter.elf`) ran three video frames to the
+  frontend's one, for its entire life. Nothing NOTICED, because the run was
+  self-consistent: it matched the native reference exactly, savestates
+  round-tripped, and turbo agreed with normal execution. Only audio, once
+  there was any, made it audible.
+  patches/0011 moves the boundary to `rend_vblank`, the video hardware's own
+  tick, which happens once per displayed field whether the game drew anything
+  or not. `<name>:audioSteady` in the gate holds it there: within one run every
+  frame must carry the same number of sample pairs, give or take the one that
+  44100 not dividing evenly into a field costs.
 - **Settings that arrive too late.** `loadGame()` RESETS every Flycast option
   and reloads them immediately before building the machine's flash, so a value
   assigned beforehand is thrown away and one assigned afterwards is too late
@@ -304,15 +322,29 @@ Chimera's firmware channel once the machine runs.
   JIT can live in a sandbox (PPSSPP's does), and it would be worth the work if
   a real game turns out to be too slow to be playable, which is the open
   question a real game would answer.
-- **Speed, unmeasured.** A reference rasteriser and three interpreters is the
-  slowest possible arrangement. Nothing here has run a real game, so nobody
-  knows what it costs.
+- **Speed.** A reference rasteriser and three interpreters is the slowest
+  possible arrangement, and now that a frame is one video field the cost per
+  frame is finally a comparable number: Street Fighter Zero 3's attract mode
+  runs at about 55 fps sandboxed and about 40 fps in the native reference on
+  this machine, which is at or just under real time before a fight has even
+  started. The SH4 recompiler is the obvious answer and the one that would
+  have to be shown deterministic first.
+- **A rate the machine chooses.** `GetVsyncNumerator`/`Denominator` answer a
+  fixed 59.94Hz, and the engine asks once, right after Init - before the game
+  has booted and programmed the SPG. A PAL disc displays 50 fields a second
+  and would be played back as if it displayed 59.94. Nothing here is PAL yet,
+  so this is written down rather than fixed.
 - **A movie.** Every gate in this repository replays inputs; none of them is a
   recorded run through the frontend, because the frontend's movie support wants
   a game worth recording.
 
 ## Log
 
+- **2026-08-30** A frame is one video field. The boundary moved from the game
+  presenting to the hardware's vblank (patches/0011), which is what the pitch
+  and speed were wandering with; `<name>:audioSteady` holds it, and the gate is
+  33 green. Street Fighter Zero 3 is byte-identical native and sandboxed over
+  900 frames, which is the first time a real game has been compared here.
 - **2026-08-27** Feasibility settled (this document). Repo created, upstream
   pinned at `c3763d8`. Headless CMake configure proven; the headless BUILD gets
   as far as the two findings above, which is the M1 starting line.
