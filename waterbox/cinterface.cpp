@@ -104,9 +104,15 @@ enum {
 static uint8_t g_setButtons[BTN_COUNT];
 static uint8_t g_buttons[BTN_COUNT];
 
-/* the analog wire: the stick and the two triggers, in the frontend's order */
+/* the analog wire: the stick and the two triggers, in the frontend's order.
+ *
+ * Started at the NEUTRAL each axis declares in waterbox.config, not at zero: a
+ * trigger's neutral is -32768 (released) and its zero is half pressed. Chimera
+ * sends every axis every frame, so it never sees the difference - but a core
+ * that reads "both triggers half held" until somebody tells it otherwise is
+ * wrong on its own terms, and the gate drives set_axis only when asked to. */
 enum { AXIS_X, AXIS_Y, AXIS_LTRIG, AXIS_RTRIG, AXIS_COUNT };
-static int16_t g_axes[AXIS_COUNT];
+static int16_t g_axes[AXIS_COUNT] = { 0, 0, -32768, -32768 };
 
 /* Where a frontend's input actually enters the machine.
  *
@@ -167,11 +173,20 @@ static void ApplyInput()
 		if (g_buttons[map[i].wire]) code &= ~map[i].mask;
 	pad.kcode = code;
 
-	/* The triggers are half axes (0..255) and the sticks are full axes
-	 * (-32768..32767); the frontend sends every axis as a signed 16-bit
-	 * value, so the triggers are folded into their own range here. */
-	pad.halfAxes[PJTI_L] = (u16)((g_axes[AXIS_LTRIG] + 32768) >> 8);
-	pad.halfAxes[PJTI_R] = (u16)((g_axes[AXIS_RTRIG] + 32768) >> 8);
+	/* The sticks are full axes and the triggers are half axes: the frontend
+	 * sends both as signed 16-bit, and a trigger's range is folded to unsigned
+	 * here - released at -32768, fully pressed at 32767.
+	 *
+	 * UNSIGNED 16-BIT, not the 0..255 a controller reports. halfAxes is the
+	 * whole 16-bit range and maple_cfg.cpp does the `>> 8` itself on the way to
+	 * PlainJoystickState; handing it a value already reduced to 0..255 meant
+	 * every trigger this machine has ever read was 0, fully pressed included.
+	 * Nothing pointed at the triggers until Unreal Tournament, which fires with
+	 * one (github #10) - the gate exercises buttons, and the fullAxes beside
+	 * this line take the range the field actually wants, so the two lines
+	 * looked like each other and were not. */
+	pad.halfAxes[PJTI_L] = (u16)(g_axes[AXIS_LTRIG] + 32768);
+	pad.halfAxes[PJTI_R] = (u16)(g_axes[AXIS_RTRIG] + 32768);
 	pad.fullAxes[PJAI_X1] = g_axes[AXIS_X];
 	pad.fullAxes[PJAI_Y1] = g_axes[AXIS_Y];
 }

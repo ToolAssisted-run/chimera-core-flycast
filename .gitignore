@@ -9,10 +9,20 @@ build/
 tests/roms-local/
 tests/firmware-local/
 
+# Projects a bug reporter attached. They carry no copyrighted content - a
+# project cites its disc by hash - but they are one person's session against
+# one build, they go stale the moment a timebase changes, and tests/ is not
+# otherwise ignored, so `git add -A` would sweep them in.
+tests/*.chimeraProject
+
 # ...and a belt to go with those braces. tests/roms IS tracked, because the
 # programs the gate builds live there - so a disc image dropped beside them is
 # one `git add -A` away from being committed, which is exactly what happened
 # once. No disc format is ever tracked here; the homebrew is .elf and .bin.
+#
+# Redistributable content somebody else wrote goes in tests/own/ instead, where
+# it is tracked deliberately and its terms are written down (tests/own/README.md
+# and the addendum in LICENSE). That is where the 240p Test Suite's .cdi lives.
 tests/roms/*.chd
 tests/roms/*.gdi
 tests/roms/*.cdi

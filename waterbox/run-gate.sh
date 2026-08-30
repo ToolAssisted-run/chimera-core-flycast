@@ -188,6 +188,47 @@ if [ -d "$wd" ]; then
 		report "input:shaped" PASS "the machine read its pad: idle != held, native == waterboxed"
 	fi
 
+	# ---- the triggers -------------------------------------------------------
+	# A Dreamcast's L and R are ANALOG, and padread.elf's answer word carries
+	# them beside the buttons: bits 0..15 are the buttons, 16..23 the right
+	# trigger, 24..31 the left. So the exact byte the machine received can be
+	# read out of RAM and held against the exact value the frontend sent, which
+	# is the only form of this check worth having - "something changed" would
+	# have passed throughout the bug this leg exists for.
+	#
+	# That bug: mapleInputState::halfAxes is the whole 16-bit range and
+	# maple_cfg.cpp shifts it down by 8 itself. The core handed it a value
+	# already reduced to 0..255, so EVERY trigger read 0, fully pressed
+	# included, and Unreal Tournament could not fire (github #10). The fullAxes
+	# lines next to it do want the reduced range, which is why the two looked
+	# alike.
+	trigread() { # <axis> <value> <runner...>; echoes "R=xx L=xx"
+		axis="$1"; value="$2"; shift 2
+		"$@" "$wd" --frames 30 --hold-axis "$axis" "$value" \
+			--dump-domain "System RAM" "$work/trig.ram" >/dev/null 2>&1 || { echo "runner failed"; return; }
+		python3 -c "
+import struct
+w = struct.unpack('<I', open('$work/trig.ram','rb').read()[0x11004:0x11008])[0]
+print('R=%02x L=%02x' % ((w >> 16) & 0xff, (w >> 24) & 0xff))
+"
+	}
+	# axis 2 is Left Trigger and axis 3 Right Trigger, in waterbox.config order
+	tl_off="$(trigread 2 -32768 "$nat/run-native")"
+	tl_on="$(trigread 2 32767 "$nat/run-native")"
+	tr_on="$(trigread 3 32767 "$nat/run-native")"
+	tl_box="$(trigread 2 32767 "$nat/run-wbx" "$gst/core.wbx")"
+	if [ "$tl_off" != "R=00 L=00" ]; then
+		report "input:triggers" FAIL "released, the machine reads $tl_off"
+	elif [ "$tl_on" != "R=00 L=ff" ]; then
+		report "input:triggers" FAIL "left trigger held, the machine reads $tl_on"
+	elif [ "$tr_on" != "R=ff L=00" ]; then
+		report "input:triggers" FAIL "right trigger held, the machine reads $tr_on"
+	elif [ "$tl_box" != "$tl_on" ]; then
+		report "input:triggers" FAIL "native reads $tl_on, sandbox reads $tl_box"
+	else
+		report "input:triggers" PASS "each trigger reaches the machine as 00 released and ff held, and only its own"
+	fi
+
 	# Lag detection is the frontend's question "did this frame look at the
 	# input", answered by patches/0002 where maple serves a controller read.
 	lag_pad="$("$nat/run-native" "$wd" --frames 30 2>/dev/null | sed -n 's/^lagFrames=//p')"
@@ -349,6 +390,102 @@ PYSEED
 	else
 		report "savedata:seeded" FAIL "could not make a marked card to mount"
 	fi
+fi
+
+# ---- the 240p Test Suite ----------------------------------------------------
+# Artemio Urbina's test suite (tests/own/240pSuite, GPLv2, redistributable - see
+# tests/own/README.md). It is homebrew written to be run on REAL Dreamcasts to
+# check that hardware behaves, which makes it the one thing in this repository
+# that can say "a real program agrees" rather than "we agree with ourselves".
+#
+# Its Controller Test draws the pad's own readouts, so the trigger check above
+# gets a second, independent witness: this one reads the number the MACHINE
+# printed on screen, through a program nobody here wrote, instead of a word this
+# repository's own assembler put in RAM. The two boxes are the L and R analog
+# readouts, found by diffing the screen with a trigger held; nothing else on the
+# screen moves, which is itself part of the claim.
+suite="$root/tests/own/240pSuite/240pSuite.cdi"
+if [ -f "$suite" ]; then
+	sd240="$work/suite240p"
+	mkdir -p "$sd240"
+	cp "$suite" "$sd240/240pSuite.cdi"
+	printf '{"disc":["240pSuite.cdi"]}' > "$sd240/slots"
+	printf '{}' > "$sd240/settings"
+
+	# down x3 to Hardware Tests, A, down to Controller Test, A. Wire indices are
+	# waterbox.config's order: 0 is A, 6 is Down.
+	nav240="--press 420:6:6 --press 450:6:6 --press 480:6:6 --press 520:6:0 --press 580:6:6 --press 630:6:0"
+	# <out.tga> <extra harness args> <runner> [the runner's own leading args].
+	# The work directory is POSITIONAL and comes first for both runners, so it
+	# cannot simply be appended after a caller's options.
+	shoot240() {
+		out="$1"; extra="$2"; shift 2
+		runner="$1"; shift
+		"$runner" "$@" "$sd240" --frames 700 $nav240 $extra --screenshot "$out" >/dev/null 2>&1
+	}
+	shoot240 "$work/s240.rest.tga"  ""                     "$nat/run-native"
+	shoot240 "$work/s240.left.tga"  "--hold-axis 2 32767"  "$nat/run-native"
+	shoot240 "$work/s240.right.tga" "--hold-axis 3 32767"  "$nat/run-native"
+	shoot240 "$work/s240.box.tga"   "--hold-axis 2 32767"  "$nat/run-wbx" "$gst/core.wbx"
+
+	verdict="$(python3 - "$work" <<'PY240'
+import struct, sys
+work = sys.argv[1]
+
+def load(name):
+    d = open(f"{work}/s240.{name}.tga", "rb").read()
+    w, h = struct.unpack("<HH", d[12:16])
+    return w, h, d[18:]
+
+def region(px, w, box):
+    x0, y0, x1, y1 = box
+    return b"".join(px[(y * w + x) * 4:(y * w + x) * 4 + 3]
+                    for y in range(y0, y1) for x in range(x0, x1))
+
+# the two readouts, with a little room around them
+LBOX = (54, 44, 72, 52)
+RBOX = (84, 44, 102, 52)
+try:
+    w, h, rest = load("rest")
+    _, _, left = load("left")
+    _, _, right = load("right")
+    _, _, box = load("box")
+except Exception as e:
+    print(f"could not read the screenshots: {e}"); sys.exit()
+
+if (w, h) != (320, 240):
+    print(f"the suite drew {w}x{h}, not 320x240"); sys.exit()
+
+restL, restR = region(rest, w, LBOX), region(rest, w, RBOX)
+leftL, leftR = region(left, w, LBOX), region(left, w, RBOX)
+rghtL, rghtR = region(right, w, LBOX), region(right, w, RBOX)
+
+if restL != restR:
+    print("at rest the two readouts already differ")
+elif leftL == restL:
+    print("holding the left trigger changed nothing the suite printed")
+elif leftR != restR:
+    print("holding the left trigger moved the RIGHT readout")
+elif rghtR == restR:
+    print("holding the right trigger changed nothing the suite printed")
+elif rghtL != restL:
+    print("holding the right trigger moved the LEFT readout")
+elif leftL != rghtR:
+    # both are fully pressed, so both must print the same number
+    print("the two triggers do not reach the same value")
+elif region(box, w, LBOX) != leftL:
+    print("native and sandbox print different numbers")
+else:
+    print("ok")
+PY240
+)"
+	if [ "$verdict" = "ok" ]; then
+		report "suite240p:triggers" PASS "the 240p Test Suite's own controller readout follows each trigger, and only its own"
+	else
+		report "suite240p:triggers" FAIL "$verdict"
+	fi
+else
+	report "suite240p:triggers" SKIP "tests/own/240pSuite/240pSuite.cdi is not here"
 fi
 
 # The Stella lesson: the native reference is the only place a real clock and

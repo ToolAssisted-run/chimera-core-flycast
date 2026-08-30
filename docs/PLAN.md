@@ -238,6 +238,15 @@ Chimera's firmware channel once the machine runs.
   or not. `<name>:audioSteady` in the gate holds it there: within one run every
   frame must carry the same number of sample pairs, give or take the one that
   44100 not dividing evenly into a field costs.
+- **Two fields that look alike and are not.** `mapleInputState` carries the
+  sticks in `fullAxes` and the triggers in `halfAxes`, side by side, and they
+  do NOT take the same range: `maple_cfg.cpp` converts `fullAxes` with
+  `GetBtFromSgn` but shifts `halfAxes` down by 8 itself, so the field wants the
+  whole 16-bit range. This core handed it a value already reduced to 0..255,
+  which the shift then turned into 0 - every trigger this machine ever read was
+  released, fully pressed included. Unreal Tournament fires with one and could
+  not (github #10). Two adjacent lines, one right and one wrong, and the wrong
+  one is the one that reads like it is being careful.
 - **Settings that arrive too late.** `loadGame()` RESETS every Flycast option
   and reloads them immediately before building the machine's flash, so a value
   assigned beforehand is thrown away and one assigned afterwards is too late
@@ -340,6 +349,13 @@ Chimera's firmware channel once the machine runs.
 
 ## Log
 
+- **2026-08-30** The analog triggers reach the machine (github #10). The 240p
+  Test Suite joined the repository (tests/own, GPLv2, addendum in LICENSE) and
+  is now a gate leg: the suite's own Controller Test prints the value each
+  trigger carries, which is a witness this repository did not write. Unreal
+  Tournament starts its match on the right trigger, from a savestate, through
+  the engine. The suite also caught a 320x240 picture being copied 640 wide -
+  that one was Chimera's engine, not this core.
 - **2026-08-30** A frame is one video field. The boundary moved from the game
   presenting to the hardware's vblank (patches/0011), which is what the pitch
   and speed were wandering with; `<name>:audioSteady` holds it, and the gate is

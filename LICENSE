@@ -24,3 +24,20 @@ Note: this covers the integration in this repository. The built core also
 contains Flycast (GPL-2.0-or-later) and skmp's refsw (BSD-3-Clause), and the
 package as a whole is therefore distributed under the GPL-2.0-or-later; see
 waterbox/package-licenses.json.
+
+
+ADDENDUM: test content that is not under the MIT licence above
+
+Some files in this repository were written by other people and are kept here,
+unmodified, because the gate runs them. The MIT licence above does not apply to
+them; each is distributed under its own terms, which travel with it.
+
+  tests/own/240pSuite/
+      Artemio Urbina's 240p Test Suite for the Dreamcast, with the author's
+      own README.TXT and Changelog.txt as distributed.
+      Copyright 2011-2022 Artemio Urbina.
+      GPL-2.0-or-later. Source: http://junkerhq.net/240p/
+
+This addendum concerns the REPOSITORY only. Nothing here is built into the core
+package or shipped in a Chimera bundle, so it does not change what the package
+is distributed under; see tests/own/README.md.

@@ -23,6 +23,9 @@
  * and two ports of five buttons (waterbox.config "input.buttons") */
 #define GATE_BTN_COUNT 16
 
+/* how many scripted presses one run may carry (--press) */
+#define GATE_MAX_PRESSES 32
+
 struct gate_core
 {
 	int (*init)(void);
@@ -63,9 +66,27 @@ struct gate_opts
 	const char *savedataDir;    /* optional: write every savedata export here after the run */
 	int exercisePad;      /* also drive this pad number (2..8) with the exercise, or 0 */
 	int wiggleAxes;       /* nonzero: drive every axis with a deterministic wander */
+	/* Scripted presses: --press <frame>:<count>:<wire index>, repeatable. The
+	 * exercise schedule is a fine way to prove input REACHES the machine, and
+	 * a poor way to ask a game a question - a menu wants "down, down, confirm",
+	 * not a coin toss. The index is the core's own wire order, which is the
+	 * order its waterbox.config declares. */
+	struct { long first, count; int index; } press[GATE_MAX_PRESSES];
+	int presses;
+	/* the same thing for an ANALOG control: --axis <frame>:<count>:<index>:
+	 * <held>:<released>, repeatable. holdAxis below is the whole-run form; this
+	 * one is for a control that has to be let go of again, which is most of
+	 * them - a menu that accepts on release does nothing for a trigger held
+	 * forever. The released value is spelled out rather than assumed, because
+	 * an axis's rest position is the core's business: a stick rests at 0 and a
+	 * trigger at -32768, and guessing wrong means quietly holding it down. */
+	struct { long first, count; int index, held, released; } axisPress[GATE_MAX_PRESSES];
+	int axisPresses;
 	int turbo;            /* nonzero: draw nothing for the first half of the run */
 	long turboSettle;     /* frames to let the picture settle before hashing it */
 	const char *audioTracePath; /* optional: one line per frame, "<frame> <sample pairs>" */
+	int holdAxis;         /* axis to hold at holdValue for the whole run, or -1 */
+	int holdValue;
 };
 
 static uint64_t gate_fnv(uint64_t h, const void *p, size_t n)
@@ -284,6 +305,32 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 			}
 		}
 
+		for (int pi = 0; pi < o->presses; pi++)
+		{
+			if (f >= o->press[pi].first && f < o->press[pi].first + o->press[pi].count
+				&& o->press[pi].index >= 0 && o->press[pi].index < GATE_BTN_COUNT)
+			{
+				buttons[o->press[pi].index] = 1;
+			}
+		}
+
+		/* one axis pinned for the whole run: what a person does with a trigger
+		 * they are holding down. The others keep the neutral the core starts
+		 * at, which is what Chimera would be sending them. */
+		if (o->holdAxis >= 0 && c->set_axis)
+			c->set_axis(o->holdAxis, o->holdValue);
+
+		/* ...and the windowed form, sent EVERY frame - held inside the window
+		 * and released outside it, the way Chimera sends every axis every
+		 * frame. An axis told once stays where it was put. */
+		for (int ai = 0; ai < o->axisPresses && c->set_axis; ai++)
+		{
+			const int inside = f >= o->axisPress[ai].first
+				&& f < o->axisPress[ai].first + o->axisPress[ai].count;
+			c->set_axis(o->axisPress[ai].index,
+				inside ? o->axisPress[ai].held : o->axisPress[ai].released);
+		}
+
 		if (o->wiggleAxes && c->set_axis)
 		{
 			/* a deterministic wander: mouse deltas -2..2, gun coords circling
@@ -413,9 +460,13 @@ static int gate_parse_opts(int argc, char **argv, int first, struct gate_opts *o
 	o->savedataDir = NULL;
 	o->exercisePad = 0;
 	o->wiggleAxes = 0;
+	o->presses = 0;
+	o->axisPresses = 0;
 	o->turbo = 0;
 	o->turboSettle = 0;
 	o->audioTracePath = NULL;
+	o->holdAxis = -1;
+	o->holdValue = 0;
 	for (int i = first; i < argc; i++)
 	{
 		if (!strcmp(argv[i], "--frames") && i + 1 < argc) o->frames = strtol(argv[++i], 0, 0);
@@ -429,10 +480,45 @@ static int gate_parse_opts(int argc, char **argv, int first, struct gate_opts *o
 		else if (!strcmp(argv[i], "--savedata-out") && i + 1 < argc) o->savedataDir = argv[++i];
 		else if (!strcmp(argv[i], "--exercise-pad") && i + 1 < argc) o->exercisePad = (int)strtol(argv[++i], 0, 0);
 		else if (!strcmp(argv[i], "--wiggle-axes")) o->wiggleAxes = 1;
+		else if (!strcmp(argv[i], "--press") && i + 1 < argc)
+		{
+			if (o->presses >= GATE_MAX_PRESSES) { fprintf(stderr, "too many --press\n"); return 0; }
+			long first = 0, count = 0; int index = -1;
+			if (sscanf(argv[++i], "%ld:%ld:%d", &first, &count, &index) != 3)
+			{
+				fprintf(stderr, "--press wants <frame>:<count>:<wire index>\n");
+				return 0;
+			}
+			o->press[o->presses].first = first;
+			o->press[o->presses].count = count;
+			o->press[o->presses].index = index;
+			o->presses++;
+		}
+		else if (!strcmp(argv[i], "--axis") && i + 1 < argc)
+		{
+			if (o->axisPresses >= GATE_MAX_PRESSES) { fprintf(stderr, "too many --axis\n"); return 0; }
+			long first = 0, count = 0; int index = -1, held = 0, released = 0;
+			if (sscanf(argv[++i], "%ld:%ld:%d:%d:%d", &first, &count, &index, &held, &released) != 5)
+			{
+				fprintf(stderr, "--axis wants <frame>:<count>:<index>:<held>:<released>\n");
+				return 0;
+			}
+			o->axisPress[o->axisPresses].first = first;
+			o->axisPress[o->axisPresses].count = count;
+			o->axisPress[o->axisPresses].index = index;
+			o->axisPress[o->axisPresses].held = held;
+			o->axisPress[o->axisPresses].released = released;
+			o->axisPresses++;
+		}
 
 		else if (!strcmp(argv[i], "--turbo")) o->turbo = 1;
 		else if (!strcmp(argv[i], "--turbo-settle") && i + 1 < argc) o->turboSettle = strtol(argv[++i], 0, 0);
 		else if (!strcmp(argv[i], "--audio-trace") && i + 1 < argc) o->audioTracePath = argv[++i];
+		else if (!strcmp(argv[i], "--hold-axis") && i + 2 < argc)
+		{
+			o->holdAxis = (int)strtol(argv[++i], 0, 0);
+			o->holdValue = (int)strtol(argv[++i], 0, 0);
+		}
 		else if (!strcmp(argv[i], "--rerecord")) ; /* run-wbx's; ignored here */
 		else { fprintf(stderr, "unknown argument %s\n", argv[i]); return 0; }
 	}
