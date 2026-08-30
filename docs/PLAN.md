@@ -247,6 +247,17 @@ Chimera's firmware channel once the machine runs.
   released, fully pressed included. Unreal Tournament fires with one and could
   not (github #10). Two adjacent lines, one right and one wrong, and the wrong
   one is the one that reads like it is being careful.
+- **A port assigned after the machine was built.** The four ports looked like
+  the region setting - read it, write `config::MapleMainDevices[port]` - and
+  are not: `emu.loadGame()` calls `mcfg_CreateDevices()` itself, so a port set
+  afterwards is a value nothing will read again. Four ports were set to
+  `gamepad`, the 240p Test Suite was asked what was connected, and it answered
+  one controller and three empty sockets. `config::setTransient("input",
+  "device<N>", ...)` is the mechanism, the same one the region uses, and for a
+  harder reason. The defaults are worth knowing too: `device1.1` AND `device1.2`
+  both default to a VMU, which is why a one-player machine always exported
+  vmu_A1 and vmu_A2 - two cards per player is the emulator's habit, not the
+  machine's.
 - **Settings that arrive too late.** `loadGame()` RESETS every Flycast option
   and reloads them immediately before building the machine's flash, so a value
   assigned beforehand is thrown away and one assigned afterwards is too late
@@ -338,6 +349,19 @@ Chimera's firmware channel once the machine runs.
   this machine, which is at or just under real time before a fight has even
   started. The SH4 recompiler is the obvious answer and the one that would
   have to be shown deterministic first.
+- **The devices declared but barely exercised.** A port can be set to
+  `arcadeStick`, `xl`, `mouse` or `lightGun`, and the gate proves the machine
+  BUILDS each of them (the suite's Maple Device List names them, and only the
+  controller family gets a memory card). What no test here does is play a game
+  with one: the mouse's relative motion and the gun's screen position reach the
+  machine, and whether they FEEL right is a question only a game that uses them
+  can answer.
+- **The keyboard.** Flycast implements the Dreamcast keyboard and this core
+  does not offer it. Roughly 104 keys on each of four ports would add ~400
+  columns to a controller that has 80, and the declared control list is static -
+  there is no way to show only the selected device's controls - so every
+  Dreamcast movie would carry them whether or not a keyboard was plugged in.
+  Worth doing if somebody wants to TAS Typing of the Dead; not worth it before.
 - **A rate the machine chooses.** `GetVsyncNumerator`/`Denominator` answer a
   fixed 59.94Hz, and the engine asks once, right after Init - before the game
   has booted and programmed the SPG. A PAL disc displays 50 fields a second
@@ -349,6 +373,16 @@ Chimera's firmware channel once the machine runs.
 
 ## Log
 
+- **2026-08-30** Four ports, and a device setting for each. `port1`..`port4`
+  take none, gamepad, arcadeStick, twinStick, xl, mouse or lightGun; the
+  declared controls are the union of all of them, per player, because the
+  control list is static and cannot follow the settings. The 240p Suite reports
+  all four ports and names each device, a twin stick's second d-pad exists
+  where a controller's does not, and every connected controller gets one memory
+  card. THE MOVIE FORMAT CHANGED: every column is now `P1 A` rather than `A`.
+  The Dreamcast keyboard is the one thing left out - ~104 keys on each of four
+  ports would more than triple every Dreamcast movie's input log for a device a
+  handful of games use.
 - **2026-08-30** The analog triggers reach the machine (github #10). The 240p
   Test Suite joined the repository (tests/own, GPLv2, addendum in LICENSE) and
   is now a gate leg: the suite's own Controller Test prints the value each

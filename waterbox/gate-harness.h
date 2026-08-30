@@ -21,7 +21,18 @@
 
 /* the wire this core declares: Power, the four console switches plus TV type,
  * and two ports of five buttons (waterbox.config "input.buttons") */
-#define GATE_BTN_COUNT 16
+/* Four ports of twenty, in waterbox.config's order. Per port:
+ *   0 Up  1 Down  2 Left  3 Right
+ *   4 A  5 B  6 C  7 X  8 Y  9 Z  10 D  11 Start
+ *   12 Up2  13 Down2  14 Left2  15 Right2
+ *   16 Reload  17 Mouse Left  18 Mouse Middle  19 Mouse Right
+ * and eleven axes: 0 Stick X, 1 Stick Y, 2 Left Trigger, 3 Right Trigger,
+ * 4 Stick 2 X, 5 Stick 2 Y, 6 Mouse X, 7 Mouse Y, 8 Mouse Wheel,
+ * 9 Gun X, 10 Gun Y. */
+#define GATE_BTN_PER_PORT 20
+#define GATE_AXIS_PER_PORT 11
+#define GATE_PORTS 4
+#define GATE_BTN_COUNT (GATE_BTN_PER_PORT * GATE_PORTS)
 
 /* how many scripted presses one run may carry (--press) */
 #define GATE_MAX_PRESSES 32
@@ -99,18 +110,30 @@ static uint64_t gate_fnv(uint64_t h, const void *p, size_t n)
 
 /* deterministic P1 pad pattern, identical in both drivers, so the input
  * path is part of the comparison; Power/Reset stay untouched */
-static void gate_exercise_pad(long frame, uint8_t *buttons)
+/* One PORT's worth of pad, driven from a deterministic schedule. `port` is
+ * 0..3 and picks both the block of wires written and a different schedule, so
+ * "player 2 held something" is a distinguishable event from "player 1 did". */
+static void gate_exercise_port(long frame, int port, uint8_t *buttons)
 {
-	uint64_t x = (uint64_t)frame * 6364136223846793005ULL + 1442695040888963407ULL;
+	uint64_t x = (uint64_t)(frame + (long)port * 7919) * 6364136223846793005ULL
+		+ 1442695040888963407ULL;
 	x ^= x >> 33;
-	/* the console switches (1..5) and player one's pad (6..10); POWER is left
-	 * alone, since resetting the machine every few frames proves nothing */
-	for (int k = 0; k < 10; k++)
-		buttons[1 + k] = (x >> k) & 1;
+	uint8_t *b = &buttons[port * GATE_BTN_PER_PORT];
+	/* the retail pad's nine: the d-pad, the four face buttons a Dreamcast
+	 * controller actually has, and Start. C, D, Z and the second d-pad belong
+	 * to devices a port has to be SET to, and are left alone here. */
+	static const int wires[9] = { 0, 1, 2, 3, 4, 5, 7, 8, 11 };
+	for (int k = 0; k < 9; k++)
+		b[wires[k]] = (x >> k) & 1;
 	/* holding UP+DOWN or LEFT+RIGHT is not a pad state a real controller
 	 * produces and some games misbehave; drop the contradictions */
-	if (buttons[6] && buttons[7]) buttons[7] = 0;
-	if (buttons[8] && buttons[9]) buttons[9] = 0;
+	if (b[0] && b[1]) b[1] = 0;
+	if (b[2] && b[3]) b[3] = 0;
+}
+
+static void gate_exercise_pad(long frame, uint8_t *buttons)
+{
+	gate_exercise_port(frame, 0, buttons);
 }
 
 /* ---- .sol parsing (quickerGPGX's movie format) ---- */
@@ -292,17 +315,12 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 		else if (o->exercise)
 		{
 			gate_exercise_pad(f, buttons);
-			// a second pad only exists on a wire wide enough to hold one;
-			// this core declares a single controller, so the block below is
-			// unreachable here and the bound says so out loud
-			if (o->exercisePad >= 2 && o->exercisePad <= 8
-				&& 2 + (o->exercisePad - 1) * 12 + 12 <= GATE_BTN_COUNT)
-			{
-				uint8_t extra[GATE_BTN_COUNT];
-				memset(extra, 0, sizeof extra);
-				gate_exercise_pad(f + 7919, extra); /* a shifted schedule */
-				memcpy(&buttons[2 + (o->exercisePad - 1) * 12], &extra[2], 12);
-			}
+			/* ...and one more port, on its own schedule. This is how "player 2
+			 * held something and player 1 did not" becomes a machine state
+			 * different from the other way round, which is the only way to show
+			 * that a port's input reaches THAT port. */
+			if (o->exercisePad >= 2 && o->exercisePad <= GATE_PORTS)
+				gate_exercise_port(f, o->exercisePad - 1, buttons);
 		}
 
 		for (int pi = 0; pi < o->presses; pi++)

@@ -359,7 +359,7 @@ for path in files:
         sys.exit(1)
 sys.exit(0)
 "; then
-		report "savedata:vmu" PASS "$(ls "$sd" | wc -l) formatted memory cards exported"
+		report "savedata:vmu" PASS "$(ls "$sd" | wc -l) formatted memory card(s) exported, one per connected controller"
 	else
 		report "savedata:vmu" FAIL "no formatted VMU came out of the save-data channel"
 	fi
@@ -413,8 +413,8 @@ if [ -f "$suite" ]; then
 	printf '{}' > "$sd240/settings"
 
 	# down x3 to Hardware Tests, A, down to Controller Test, A. Wire indices are
-	# waterbox.config's order: 0 is A, 6 is Down.
-	nav240="--press 420:6:6 --press 450:6:6 --press 480:6:6 --press 520:6:0 --press 580:6:6 --press 630:6:0"
+	# waterbox.config's order, player 1: 1 is Down and 4 is A.
+	nav240="--press 420:6:1 --press 450:6:1 --press 480:6:1 --press 520:6:4 --press 580:6:1 --press 630:6:4"
 	# <out.tga> <extra harness args> <runner> [the runner's own leading args].
 	# The work directory is POSITIONAL and comes first for both runners, so it
 	# cannot simply be appended after a caller's options.
@@ -484,8 +484,135 @@ PY240
 	else
 		report "suite240p:triggers" FAIL "$verdict"
 	fi
+
+	# ---- four ports --------------------------------------------------------
+	# A Dreamcast has four, and the Controller Test draws one quadrant per port:
+	# A0 top left, B0 top right, C0 bottom left, D0 bottom right. With four
+	# gamepads it names a device in all four - and holding A on ONE of them must
+	# light that quadrant's A and no other, which is the whole claim. A port
+	# nothing is plugged into cannot light anything.
+	#
+	# This is the check that would have caught the first attempt, where the
+	# ports were assigned AFTER loadGame had already built the maple devices:
+	# the settings said four gamepads and the machine had one.
+	p4="$work/suite240p-4"
+	mkdir -p "$p4"
+	cp "$suite" "$p4/240pSuite.cdi"
+	printf '{"disc":["240pSuite.cdi"]}' > "$p4/slots"
+	printf '{"port1":"gamepad","port2":"gamepad","port3":"gamepad","port4":"gamepad"}' > "$p4/settings"
+
+	"$nat/run-native" "$p4" --frames 700 $nav240 --screenshot "$work/p4.rest.tga" >/dev/null 2>&1
+	for port in 0 1 2 3; do
+		# wire 4 of each port is A; a port's block is twenty wires wide
+		"$nat/run-native" "$p4" --frames 700 $nav240 --press "665:35:$((port * 20 + 4))" \
+			--screenshot "$work/p4.$port.tga" >/dev/null 2>&1
+	done
+	"$nat/run-wbx" "$gst/core.wbx" "$p4" --frames 700 $nav240 --press 665:35:44 \
+		--screenshot "$work/p4.box.tga" >/dev/null 2>&1
+
+	verdict="$(python3 - "$work" <<'PYPORTS'
+import struct, sys
+work = sys.argv[1]
+
+def load(name):
+    d = open(f"{work}/p4.{name}.tga", "rb").read()
+    w, h = struct.unpack("<HH", d[12:16])
+    return w, h, d[18:]
+
+def region(px, w, box):
+    x0, y0, x1, y1 = box
+    return b"".join(px[(y * w + x) * 4:(y * w + x) * 4 + 3]
+                    for y in range(y0, y1) for x in range(x0, x1))
+
+# where each port's A indicator is drawn, found by holding it and diffing
+BOXES = [(89, 70, 97, 80), (249, 70, 257, 80),
+         (89, 160, 97, 170), (249, 160, 257, 170)]
+try:
+    w, h, rest = load("rest")
+    held = [load(str(p))[2] for p in range(4)]
+    box = load("box")[2]
+except Exception as e:
+    print(f"could not read the screenshots: {e}"); sys.exit()
+
+if (w, h) != (320, 240):
+    print(f"the suite drew {w}x{h}, not 320x240"); sys.exit()
+
+for p in range(4):
+    for q in range(4):
+        before, after = region(rest, w, BOXES[q]), region(held[p], w, BOXES[q])
+        if p == q and before == after:
+            print(f"holding A on port {p + 1} lit nothing there"); sys.exit()
+        if p != q and before != after:
+            print(f"holding A on port {p + 1} moved port {q + 1}"); sys.exit()
+if region(box, w, BOXES[2]) != region(held[2], w, BOXES[2]):
+    print("native and sandbox disagree about port 3"); sys.exit()
+print("ok")
+PYPORTS
+)"
+	if [ "$verdict" = "ok" ]; then
+		report "suite240p:ports" PASS "four controllers, and each one's A lights its own quadrant and no other"
+	else
+		report "suite240p:ports" FAIL "$verdict"
+	fi
+
+	# ---- a port's setting is a DIFFERENT DEVICE, not a relabelled one -------
+	# Four gamepads prove the ports are wired; they do not prove the setting
+	# picks anything. This does: a twin stick has a SECOND D-PAD and a retail
+	# controller does not, so the same wire held on the same port either reaches
+	# the machine or does not exist, depending only on what the project said was
+	# plugged in.
+	pts="$work/suite240p-ts"
+	mkdir -p "$pts"
+	cp "$suite" "$pts/240pSuite.cdi"
+	printf '{"disc":["240pSuite.cdi"]}' > "$pts/slots"
+	tsverdict="ok"
+	for dev in gamepad twinStick; do
+		printf '{"port1":"gamepad","port2":"%s"}' "$dev" > "$pts/settings"
+		"$nat/run-native" "$pts" --frames 700 $nav240 \
+			--screenshot "$work/ts.$dev.idle.tga" >/dev/null 2>&1
+		# wire 12 of port 2 (20 + 12) is P2 Up2, the second d-pad's up
+		"$nat/run-native" "$pts" --frames 700 $nav240 --press 665:35:32 \
+			--screenshot "$work/ts.$dev.held.tga" >/dev/null 2>&1
+		if cmp -s "$work/ts.$dev.idle.tga" "$work/ts.$dev.held.tga"; then
+			[ "$dev" = "twinStick" ] && tsverdict="a twin stick's second d-pad reached nothing"
+		else
+			[ "$dev" = "gamepad" ] && tsverdict="a plain controller reported a second d-pad"
+		fi
+	done
+	if [ "$tsverdict" = "ok" ]; then
+		report "suite240p:devices" PASS "a twin stick has a second d-pad where a controller has none, on the same wire and the same port"
+	else
+		report "suite240p:devices" FAIL "$tsverdict"
+	fi
+
+	# A memory card per connected controller, which is what makes four players
+	# able to save - and ONLY for the devices that have a slot to put one in. A
+	# mouse and a light gun have none on the real thing either. One card per
+	# controller, not two: BOTH of port A's expansion slots default to a VMU,
+	# which is the emulator's habit rather than the machine's.
+	cardcheck() { # <settings json> <expected file list>
+		sd="$work/savedata-cards"
+		rm -rf "$sd"; mkdir -p "$sd"
+		printf '%s' "$1" > "$p4/settings"
+		"$nat/run-native" "$p4" --frames 60 --savedata-out "$sd" >/dev/null 2>&1
+		got="$(ls "$sd" 2>/dev/null | tr '\n' ' ')"
+		[ "$got" = "$2" ] || echo "$got"
+	}
+	four="$(cardcheck '{"port1":"gamepad","port2":"gamepad","port3":"gamepad","port4":"gamepad"}' \
+		"vmu_A1.bin vmu_B1.bin vmu_C1.bin vmu_D1.bin ")"
+	mixed="$(cardcheck '{"port1":"gamepad","port2":"twinStick","port3":"mouse","port4":"lightGun"}' \
+		"vmu_A1.bin vmu_B1.bin ")"
+	if [ -n "$four" ]; then
+		report "suite240p:cards" FAIL "four controllers gave '$four', want one card each"
+	elif [ -n "$mixed" ]; then
+		report "suite240p:cards" FAIL "a mouse and a gun gave '$mixed', and neither has a slot for a card"
+	else
+		report "suite240p:cards" PASS "a card for every controller and none for a mouse or a gun"
+	fi
 else
-	report "suite240p:triggers" SKIP "tests/own/240pSuite/240pSuite.cdi is not here"
+	for leg in triggers ports devices cards; do
+		report "suite240p:$leg" SKIP "tests/own/240pSuite/240pSuite.cdi is not here"
+	done
 fi
 
 # The Stella lesson: the native reference is the only place a real clock and

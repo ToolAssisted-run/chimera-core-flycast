@@ -94,25 +94,63 @@ static bool g_loaded;
  * back into it when it is loaded to be looked at. */
 extern "C" { ECL_INVISIBLE int chimera_render_enabled = 1; }
 
-/* the wire: one Dreamcast controller. Order is the frontend's button order and
- * must match waterbox.config. */
+/* The wire: FOUR Dreamcast ports, each with the same superset of controls.
+ * Order is the frontend's button order and must match waterbox.config - player
+ * by player, and within a player exactly this list. */
+#define DC_PORTS 4
 enum {
-	BTN_A, BTN_B, BTN_X, BTN_Y, BTN_START,
 	BTN_UP, BTN_DOWN, BTN_LEFT, BTN_RIGHT,
-	BTN_COUNT
+	BTN_A, BTN_B, BTN_C, BTN_X, BTN_Y, BTN_Z, BTN_D, BTN_START,
+	BTN_UP2, BTN_DOWN2, BTN_LEFT2, BTN_RIGHT2,
+	BTN_RELOAD,
+	BTN_MOUSE_LEFT, BTN_MOUSE_MIDDLE, BTN_MOUSE_RIGHT,
+	BTN_PER_PORT
 };
+#define BTN_COUNT (BTN_PER_PORT * DC_PORTS)
 static uint8_t g_setButtons[BTN_COUNT];
 static uint8_t g_buttons[BTN_COUNT];
 
-/* the analog wire: the stick and the two triggers, in the frontend's order.
- *
- * Started at the NEUTRAL each axis declares in waterbox.config, not at zero: a
- * trigger's neutral is -32768 (released) and its zero is half pressed. Chimera
- * sends every axis every frame, so it never sees the difference - but a core
- * that reads "both triggers half held" until somebody tells it otherwise is
- * wrong on its own terms, and the gate drives set_axis only when asked to. */
-enum { AXIS_X, AXIS_Y, AXIS_LTRIG, AXIS_RTRIG, AXIS_COUNT };
-static int16_t g_axes[AXIS_COUNT] = { 0, 0, -32768, -32768 };
+/* the analog wire, per port. Started at the NEUTRAL each axis declares in
+ * waterbox.config, not at zero: a trigger's neutral is -32768 (released) and
+ * its zero is half pressed. Chimera sends every axis every frame, so it never
+ * sees the difference - but a core that reads "both triggers half held" until
+ * somebody tells it otherwise is wrong on its own terms, and the gate drives
+ * set_axis only when asked to. */
+enum {
+	AXIS_X, AXIS_Y, AXIS_LTRIG, AXIS_RTRIG,
+	AXIS_X2, AXIS_Y2,
+	AXIS_MOUSE_X, AXIS_MOUSE_Y, AXIS_MOUSE_WHEEL,
+	AXIS_GUN_X, AXIS_GUN_Y,
+	AXIS_PER_PORT
+};
+#define AXIS_COUNT (AXIS_PER_PORT * DC_PORTS)
+static int16_t g_axes[AXIS_COUNT];
+
+static void ResetAxesToNeutral()
+{
+	for (int p = 0; p < DC_PORTS; p++)
+	{
+		int16_t *a = &g_axes[p * AXIS_PER_PORT];
+		for (int i = 0; i < AXIS_PER_PORT; i++) a[i] = 0;
+		a[AXIS_LTRIG] = -32768;
+		a[AXIS_RTRIG] = -32768;
+	}
+}
+
+/* What each port is: MDT_None, or one of the devices waterbox.config offers.
+ * Read from the settings once, at Init - a port's device is part of the
+ * machine, not something that changes under a running movie. */
+static MapleDeviceType g_portDevice[DC_PORTS];
+
+/* The controller FAMILY - everything derived from maple_sega_controller, which
+ * all read the same PlainJoystickState and differ only in what they report. A
+ * mouse and a light gun are different wires and are not in it; nor do they have
+ * expansion slots to put a memory card in, which is true of the real ones. */
+static bool IsControllerFamily(MapleDeviceType t)
+{
+	return t == MDT_SegaController || t == MDT_AsciiStick
+		|| t == MDT_TwinStick || t == MDT_SegaControllerXL;
+}
 
 /* Where a frontend's input actually enters the machine.
  *
@@ -158,20 +196,53 @@ void WriteSample(s16 r, s16 l)
 }
 
 
-static void ApplyInput()
+static void ApplyInputPort(int port)
 {
-	MapleInputState& pad = mapleInputState[0];
+	MapleInputState& pad = mapleInputState[port];
+	const uint8_t *btn = &g_buttons[port * BTN_PER_PORT];
+	const int16_t *ax = &g_axes[port * AXIS_PER_PORT];
+	const MapleDeviceType device = g_portDevice[port];
 
 	u32 code = ~0u; /* Dreamcast buttons are ACTIVE LOW */
 	static const struct { int wire; u32 mask; } map[] = {
-		{ BTN_A, DC_BTN_A }, { BTN_B, DC_BTN_B }, { BTN_X, DC_BTN_X },
-		{ BTN_Y, DC_BTN_Y }, { BTN_START, DC_BTN_START },
+		{ BTN_A, DC_BTN_A }, { BTN_B, DC_BTN_B }, { BTN_C, DC_BTN_C },
+		{ BTN_X, DC_BTN_X }, { BTN_Y, DC_BTN_Y }, { BTN_Z, DC_BTN_Z },
+		{ BTN_D, DC_BTN_D }, { BTN_START, DC_BTN_START },
 		{ BTN_UP, DC_DPAD_UP }, { BTN_DOWN, DC_DPAD_DOWN },
 		{ BTN_LEFT, DC_DPAD_LEFT }, { BTN_RIGHT, DC_DPAD_RIGHT },
+		{ BTN_UP2, DC_DPAD2_UP }, { BTN_DOWN2, DC_DPAD2_DOWN },
+		{ BTN_LEFT2, DC_DPAD2_LEFT }, { BTN_RIGHT2, DC_DPAD2_RIGHT },
+		{ BTN_RELOAD, DC_BTN_RELOAD },
 	};
 	for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++)
-		if (g_buttons[map[i].wire]) code &= ~map[i].mask;
+		if (btn[map[i].wire]) code &= ~map[i].mask;
 	pad.kcode = code;
+
+	/* The mouse: three buttons of its own (ACTIVE LOW again) and RELATIVE
+	 * motion, which is why it does not share the stick's axes. Flycast reads
+	 * these as a delta accumulated since the last frame and clamps them itself
+	 * (maple_mouse::mo_cvt, +-512), so what a frontend sends is the movement of
+	 * this frame and not a position. */
+	if (device == MDT_Mouse)
+	{
+		u8 buttons = ~0u;
+		if (btn[BTN_MOUSE_LEFT]) buttons &= ~(1 << 2);
+		if (btn[BTN_MOUSE_RIGHT]) buttons &= ~(1 << 1);
+		if (btn[BTN_MOUSE_MIDDLE]) buttons &= ~(1 << 3);
+		pad.mouseButtons = buttons;
+		pad.relPos.x += ax[AXIS_MOUSE_X];
+		pad.relPos.y += ax[AXIS_MOUSE_Y];
+		pad.relPos.wheel += ax[AXIS_MOUSE_WHEEL];
+	}
+
+	/* The light gun: an absolute position on the screen, which the PVR turns
+	 * into the scanline the gun was pointed at (spg.cpp). -32768..32767 is the
+	 * frontend's range for every axis, so it is mapped onto the display here. */
+	if (device == MDT_LightGun)
+	{
+		pad.absPos.x = (int)(((int32_t)ax[AXIS_GUN_X] + 32768) * 640 / 65536);
+		pad.absPos.y = (int)(((int32_t)ax[AXIS_GUN_Y] + 32768) * 480 / 65536);
+	}
 
 	/* The sticks are full axes and the triggers are half axes: the frontend
 	 * sends both as signed 16-bit, and a trigger's range is folded to unsigned
@@ -185,10 +256,25 @@ static void ApplyInput()
 	 * one (github #10) - the gate exercises buttons, and the fullAxes beside
 	 * this line take the range the field actually wants, so the two lines
 	 * looked like each other and were not. */
-	pad.halfAxes[PJTI_L] = (u16)(g_axes[AXIS_LTRIG] + 32768);
-	pad.halfAxes[PJTI_R] = (u16)(g_axes[AXIS_RTRIG] + 32768);
-	pad.fullAxes[PJAI_X1] = g_axes[AXIS_X];
-	pad.fullAxes[PJAI_Y1] = g_axes[AXIS_Y];
+	pad.halfAxes[PJTI_L] = (u16)(ax[AXIS_LTRIG] + 32768);
+	pad.halfAxes[PJTI_R] = (u16)(ax[AXIS_RTRIG] + 32768);
+	pad.fullAxes[PJAI_X1] = ax[AXIS_X];
+	pad.fullAxes[PJAI_Y1] = ax[AXIS_Y];
+	/* The second stick, which only the PantherDC reports (FullController reads
+	 * PJAI_X2/Y2 for its axes 4 and 5). Written for every device because the
+	 * ones without it never look. */
+	pad.fullAxes[PJAI_X2] = ax[AXIS_X2];
+	pad.fullAxes[PJAI_Y2] = ax[AXIS_Y2];
+}
+
+/* Every port, every frame. A port set to 'none' has no device to read it, so
+ * what is written there is never looked at - but it is written anyway, because
+ * "the state of a port nobody asked about" is not something a movie should have
+ * to think about. */
+static void ApplyInput()
+{
+	for (int port = 0; port < DC_PORTS; port++)
+		ApplyInputPort(port);
 }
 
 /* ---------------------------------------------------------------------------
@@ -279,6 +365,47 @@ static void ApplyMachineSettings()
 		std::to_string(SettingIndex("language", languages, 6, 1)));
 	config::setTransient("config", "Dreamcast.Broadcast",
 		std::to_string(SettingIndex("broadcast", broadcasts, 4, 0)));
+
+	/* What is plugged into each of the four ports.
+	 *
+	 * TRANSIENT, and for a harder reason than the region's. The maple devices
+	 * are BUILT inside loadGame (emulator.cpp calls mcfg_CreateDevices there),
+	 * so a port assigned afterwards is a value nothing will ever read again -
+	 * the machine already has whatever the defaults said. Which is exactly what
+	 * happened while this was written the obvious way: four ports were set to
+	 * 'gamepad', the 240p Suite was asked what was connected, and it answered
+	 * one controller and three empty sockets.
+	 *
+	 * The defaults are worth knowing too: device1 is a controller and BOTH of
+	 * its expansion slots are memory cards, which is why a one-player machine
+	 * has always exported vmu_A1 and vmu_A2. A card goes in the first slot of
+	 * anything that has one - the controller family - and the second slot is
+	 * left empty, because two cards per player is the emulator's habit and not
+	 * the machine's. A mouse and a light gun have no slots at all on the real
+	 * thing (maple_getPortCount), and get none here. */
+	static const char *const devices[] = {
+		"none", "gamepad", "arcadeStick", "twinStick", "xl", "mouse", "lightGun"
+	};
+	static const MapleDeviceType types[] = {
+		MDT_None, MDT_SegaController, MDT_AsciiStick, MDT_TwinStick,
+		MDT_SegaControllerXL, MDT_Mouse, MDT_LightGun
+	};
+	for (int port = 0; port < DC_PORTS; port++)
+	{
+		char key[16];
+		snprintf(key, sizeof(key), "port%d", port + 1);
+		g_portDevice[port] = types[SettingIndex(key, devices, 7, port == 0 ? 1 : 0)];
+
+		const MapleDeviceType slot0 =
+			IsControllerFamily(g_portDevice[port]) ? MDT_SegaVMU : MDT_None;
+
+		snprintf(key, sizeof(key), "device%d", port + 1);
+		config::setTransient("input", key, std::to_string((int)g_portDevice[port]));
+		snprintf(key, sizeof(key), "device%d.1", port + 1);
+		config::setTransient("input", key, std::to_string((int)slot0));
+		snprintf(key, sizeof(key), "device%d.2", port + 1);
+		config::setTransient("input", key, std::to_string((int)MDT_None));
+	}
 }
 
 /* Which bios this machine runs, which is a PROJECT decision rather than a
@@ -302,6 +429,7 @@ ECL_EXPORT const char *GetLoadError(void) { return g_loadError; }
 ECL_EXPORT int Init(void)
 {
 	g_loadError[0] = '\0';
+	ResetAxesToNeutral();
 
 	/* Save data the project brought is mounted under its own name and the
 	 * machine picks it up as it builds each card (chimera_register_vmu). What
@@ -319,7 +447,8 @@ ECL_EXPORT int Init(void)
 			{
 				snprintf(g_loadError, sizeof(g_loadError),
 					"this machine does not read save data called \"%s\". Its cards are "
-					"vmu_A1.bin and vmu_A2.bin - the names Export Save Data writes.", entry);
+					"vmu_A1.bin through vmu_D1.bin, one per connected controller - the "
+					"names Export Save Data writes.", entry);
 				return 0;
 			}
 		}
@@ -369,17 +498,7 @@ ECL_EXPORT int Init(void)
 		config::AutoLoadState = false;
 		config::AutoSaveState = false;
 
-		/* One controller in port A with a memory card in its first slot: the
-		 * machine a movie assumes unless a project says otherwise. The VMU is
-		 * part of that machine, so the frontend gets its contents through the
-		 * save-data channel rather than the core keeping a file somewhere. */
 		ApplyMachineSettings();
-
-		config::MapleMainDevices[0] = MDT_SegaController;
-		config::MapleExpansionDevices[0][0] = MDT_SegaVMU;
-		config::MapleExpansionDevices[0][1] = MDT_None;
-		for (int port = 1; port < 4; port++)
-			config::MapleMainDevices[port] = MDT_None;
 
 #if defined(CHIMERA_GUEST_GL)
 		/* Which renderer draws. Both are software - one is skmp's reference
@@ -457,11 +576,16 @@ ECL_EXPORT void SetAxis(int index, int value)
 
 ECL_EXPORT void FrameAdvance(uint64_t packed)
 {
-	/* two input channels, and a frame is the UNION of them: a controller of
-	 * 64 buttons or fewer arrives packed in this call, while the gate harness
-	 * (and any wider controller) drives SetButton. */
+	/* Two input channels, and a frame is the UNION of them: the first 64
+	 * buttons arrive packed in this call, while the gate harness (and any
+	 * controller wider than 64) drives SetButton.
+	 *
+	 * FOUR PORTS IS WIDER THAN 64. Shifting a uint64_t by 64 or more is
+	 * undefined, not zero, so the packed channel stops where it runs out and
+	 * the rest of the wire is SetButton's alone - which is what Chimera uses
+	 * for a controller this wide anyway. */
 	for (int i = 0; i < BTN_COUNT; i++)
-		g_buttons[i] = g_setButtons[i] || ((packed >> i) & 1);
+		g_buttons[i] = g_setButtons[i] || (i < 64 && ((packed >> i) & 1));
 
 	g_inputRead = 0;
 	g_nsamples = 0;
