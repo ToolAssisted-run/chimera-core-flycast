@@ -32,28 +32,37 @@ done
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-digests() { grep -E '^(frames|vsync|videoHash|audioHash|lagFrames|domain\[)'; }
+digests() { grep -E '^(frames|vsync|videoHash|audioHash|audioFrames|lagFrames|domain\[)'; }
 # What a turbo run can be held to: everything except the whole-run video hash,
 # which a run that skipped the first half cannot possibly match - the second
 # half it did draw is compared instead.
-turboDigests() { grep -E '^(frames|vsync|tailVideoHash|audioHash|lagFrames|domain\[)'; }
+turboDigests() { grep -E '^(frames|vsync|tailVideoHash|audioHash|audioFrames|lagFrames|domain\[)'; }
 
 ok=0
 failed=0
-report() { printf "%-30s %-6s %s\n" "$1" "$2" "$3"; case "$2" in PASS) ok=$((ok+1)) ;; *) failed=$((failed+1)) ;; esac; }
+# SKIP counts as neither: a check that does not apply to this program is not a
+# pass to brag about and not a failure to fix.
+report() { printf "%-30s %-6s %s\n" "$1" "$2" "$3"; case "$2" in PASS) ok=$((ok+1)) ;; SKIP) ;; *) failed=$((failed+1)) ;; esac; }
 printf "%-30s %-6s %s\n" "Check" "Result" "Detail"
 printf "%-30s %-6s %s\n" "-----" "------" "------"
 
-# name program frames
+# name program frames [noturbo]
+#
+# noturbo: the program draws ONE frame and then spins forever (see
+# tests/make-testprog.py). Turbo skips the drawing of the first half of a run,
+# and for this one that is the only render there will ever be - so the picture
+# stays black and there is nothing in the second half to compare it against.
+# That is turbo doing exactly what it says; the other three redraw continuously
+# and are where the leg earns its keep.
 tests=(
 	"counter counter.elf 300"
 	"counterShort counter.elf 60"
 	"padread padread.elf 120"
-	"triangle triangle.elf 30"
+	"triangle triangle.elf 30 noturbo"
 )
 
 for t in "${tests[@]}"; do
-	read -r name prog frames <<< "$t"
+	read -r name prog frames noturbo <<< "$t"
 
 	wd="$work/$name"
 	mkdir -p "$wd"
@@ -88,6 +97,21 @@ for t in "${tests[@]}"; do
 	# The sandbox snapshots the whole guest, so a savestate here is the whole
 	# machine by construction; what this checks is that taking one every frame
 	# and restoring it changes nothing.
+	# THE MACHINE MUST MAKE SOUND. Not "the right sound" - there is no reference
+	# for that here - but that the AICA's samples reach the ABI at all. This
+	# core shipped silent for its whole life because WriteSample was a stub, and
+	# nothing noticed: an empty buffer hashes consistently and matches its own
+	# reference perfectly. A sample count is the one thing that does not.
+	produced="$(sed -n 's/^audioFrames=//p' "$work/box.txt")"
+	if [ -z "$produced" ] || [ "$produced" -eq 0 ]; then
+		report "$name:audio" FAIL "the machine produced no samples at all"
+	else
+		report "$name:audio" PASS "$produced sample pairs over $frames frames ($((produced / frames)) per frame at 44.1kHz)"
+	fi
+
+	if [ "${noturbo:-}" = "noturbo" ]; then
+		report "$name:turbo" SKIP "this program draws one frame and stops"
+	else
 	# Turbo: the core's drawing switched off for the first half of the run and
 	# back on for the second. The machine, the sound, the lag count and every
 	# picture of that second half must be what they would have been.
@@ -100,6 +124,7 @@ for t in "${tests[@]}"; do
 		fi
 	else
 		report "$name:turbo" FAIL "turbo runner error"
+	fi
 	fi
 
 	if ! "$nat/run-wbx" "$gst/core.wbx" "$wd" --frames "$frames" --rerecord 2>/dev/null | digests > "$work/rr.txt"; then

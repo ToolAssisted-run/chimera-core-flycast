@@ -57,10 +57,16 @@ void push_vmu_screen(int, int, u8 *) {}
 /* ---------------------------------------------------------------------------
  * Audio. The frontend takes samples from the ABI, not from a device: the
  * sandbox has neither a sound card nor a microphone.
+ *
+ * WriteSample is the exception and is NOT a stub - it is where the AICA's
+ * output leaves the machine, and it lives in cinterface.cpp next to the buffer
+ * it fills. It was a stub until 2026-08-30, which is why this core was silent
+ * for its whole life: upstream's own WriteSample stages 512 samples and hands
+ * the block to an AudioBackend, and with no backend and no sound card there was
+ * nothing here to replace it with, so nothing did.
  */
 void InitAudio() {}
 void TermAudio() {}
-void WriteSample(s16, s16) {}
 void StartAudioRecording(bool) {}
 void StopAudioRecording() {}
 u32 RecordAudio(void *, u32) { return 0; }

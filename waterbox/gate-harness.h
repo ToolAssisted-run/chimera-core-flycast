@@ -226,6 +226,10 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 		frames = sol.count;
 
 	uint64_t vh = 0, ah = 0;
+	/* how many sample pairs the machine actually produced. A core that delivers
+	 * none still hashes consistently and still matches its own reference, which
+	 * is how this one stayed silent for its whole life. */
+	long audioFrames = 0;
 	/* the second half of the run, hashed separately: see the turbo hook. The
 	 * settle window is for a machine whose picture is built from more than
 	 * one frame - an interlaced display weaves two fields - where the first
@@ -316,6 +320,7 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 			th = gate_fnv(th, video, (size_t)w * h * 4);
 		}
 		ah = gate_fnv(ah, audio, (size_t)n * 2 * sizeof(int16_t));
+		audioFrames += n;
 		if (!c->input_was_read())
 			lag++;
 		if (o->screenshotPath && f == frames - 1)
@@ -327,6 +332,7 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 	printf("videoHash=%016llx\n", (unsigned long long)vh);
 	printf("tailVideoHash=%016llx\n", (unsigned long long)th);
 	printf("audioHash=%016llx\n", (unsigned long long)ah);
+	printf("audioFrames=%ld\n", audioFrames);
 	printf("lagFrames=%ld\n", lag);
 	int nd = c->domain_count();
 	for (int i = 0; i < nd; i++)

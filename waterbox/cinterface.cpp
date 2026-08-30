@@ -71,7 +71,7 @@ bool chimera_gl_available() { return g_glUp; }
  */
 #define DC_WIDTH 640
 #define DC_HEIGHT 480
-#define MAX_SAMPLES 2048
+#define MAX_SAMPLES 8192
 
 static char g_loadError[512];
 static uint32_t g_video[DC_WIDTH * DC_HEIGHT];
@@ -123,6 +123,34 @@ static int16_t g_axes[AXIS_COUNT];
  * patches/ adds a call to this where maple answers a controller read.
  */
 extern "C" void chimera_input_was_read(void) { g_inputRead = 1; }
+
+/* Where the AICA's output leaves the machine. Flycast calls this once per
+ * sample pair from the sound chip's mixer (sgc_if.cpp), and upstream's own
+ * version stages 512 of them and hands the block to an AudioBackend - the shape
+ * a sound card wants, and the wrong one here: it would deliver 512 samples on
+ * one frame and 1024 on the next while the machine made 735, holding the
+ * remainder back across the frame boundary. A frame-stepped core wants exactly
+ * the samples of the frame it just ran.
+ *
+ * Note the argument order, which is upstream's: RIGHT first. The buffer is
+ * interleaved left-right, as the ABI's audio channel is.
+ *
+ * g_nsamples is reset at the top of every FrameAdvance, so what is here is this
+ * frame's sound and nothing else. A frame that somehow produced more than the
+ * declared buffer holds keeps the first of them rather than running off the
+ * end. The AICA runs at 44.1kHz, so a frame that took a sixtieth of a second
+ * carries about 735 pairs - but a frame here ends when the machine PRESENTS,
+ * and a game that renders slowly makes longer frames with proportionally more
+ * sound in them. The buffer holds 8192, a fifth of a second. */
+void WriteSample(s16 r, s16 l)
+{
+	if (g_nsamples >= MAX_SAMPLES)
+		return;
+	g_soundOut[g_nsamples * 2] = l;
+	g_soundOut[g_nsamples * 2 + 1] = r;
+	g_nsamples++;
+}
+
 
 static void ApplyInput()
 {
@@ -482,6 +510,8 @@ ECL_EXPORT void SetRenderingEnabled(int on) { chimera_render_enabled = on != 0; 
 ECL_EXPORT int GetVideoWidth(void) { return g_videoWidth; }
 ECL_EXPORT int GetVideoHeight(void) { return g_videoHeight; }
 
+/* The AICA's samples reach the frame buffer through WriteSample, which is
+ * defined above the export block (C++ linkage - Flycast declares it). */
 ECL_EXPORT int16_t *GetAudio(void) { return g_soundOut; }
 ECL_EXPORT int GetAudioSampleCount(void) { return g_nsamples; }
 
