@@ -629,6 +629,56 @@ if [ -d "$wd" ]; then
 	fi
 fi
 
+# ---- what a project PLUGS IN decides what a movie has columns for ----------
+# This package declares the union of every device its four ports can hold -
+# twenty controls and eleven axes per port - because a declaration is static and
+# cannot know what a project chose. The core answers IsButtonActive and
+# IsAxisActive once, after Init, and the engine builds the entry from what the
+# machine HAS. A default Dreamcast is nine buttons and four axes, not eighty and
+# forty-four.
+#
+# Every shape below is the DEVICE's, read off its own capability mask in
+# maple_devs.cpp: a retail pad has no C, D, Z or second d-pad; an arcade stick
+# has C and Z but no analog at all; a twin stick has the second d-pad and no
+# analog; the PantherDC has everything including a second stick; a mouse and a
+# gun are not controllers and have neither a d-pad nor a trigger.
+chimera_root="${CHIMERA_ROOT:-$root/../../..}"
+crun="$chimera_root/build/meson-linux/chimera-run"
+cpkg="$chimera_root/build/Cores/flycast.chimeraCore"
+if [ ! -x "$crun" ] || [ ! -f "$cpkg" ]; then
+	report "ports:columns" SKIP "needs chimera-run and a built package (set CHIMERA_ROOT)"
+else
+	printf '[Input]\nLogKey:#\n' > "$work/none.txt"
+	wrong=""
+	check() { # <settings> <expected entry> <what it means>
+		got="$("$crun" "$cpkg" "$root/tests/roms/counter.elf" "$work/none.txt" \
+			--settings "$1" --frames 1 --record "$work/shape.txt" >/dev/null 2>&1 \
+			&& head -1 "$work/shape.txt")"
+		[ "$got" = "$2" ] || wrong="$wrong; $3 gave [${got:-nothing}] want [$2]"
+	}
+	check '{}' \
+		'||    0,    0,    0,    0,.........|' "a retail pad: a stick, two triggers, nine buttons"
+	check '{"port1":"arcadeStick"}' \
+		'||...........|' "an arcade stick: C and Z, and no analog anywhere"
+	check '{"port1":"twinStick"}' \
+		'||..............|' "a twin stick: a second d-pad, and no analog"
+	check '{"port1":"xl"}' \
+		'||    0,    0,    0,    0,    0,    0,................|' "a PantherDC: every button and a second stick"
+	check '{"port1":"mouse"}' \
+		'||    0,    0,    0,...|' "a mouse: three buttons and three relative axes"
+	check '{"port1":"lightGun"}' \
+		'||    0,    0,........|' "a gun: a screen position, a trigger and a reload"
+	check '{"port1":"gamepad","port2":"gamepad"}' \
+		'||    0,    0,    0,    0,.........|    0,    0,    0,    0,.........|' "two pads"
+	check '{"port1":"none"}' \
+		'||' "nothing plugged in anywhere"
+	if [ -z "$wrong" ]; then
+		report "ports:columns" PASS "a movie carries the controls the machine has, and no others"
+	else
+		report "ports:columns" FAIL "${wrong#; }"
+	fi
+fi
+
 echo
 echo "$ok ok, $failed failed"
 [ "$failed" -eq 0 ]

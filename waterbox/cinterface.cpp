@@ -569,6 +569,83 @@ ECL_EXPORT void SetButton(int index, int value)
 	if (index >= 0 && index < BTN_COUNT) g_setButtons[index] = value ? 1 : 0;
 }
 
+/* WHICH DECLARED CONTROLS THIS MACHINE HAS.
+ *
+ * waterbox.config declares the union of every device the four ports can hold,
+ * because a declaration is static and cannot know what a project plugged in.
+ * The port settings are read here, so here is where the question is answered.
+ *
+ * Every answer below is READ OFF THE DEVICE rather than remembered: a maple
+ * controller masks the buttons it does not have to "not pressed" in its own
+ * getButtonState (maple_devs.cpp), so that mask IS the list of what it has, and
+ * the analog side comes from getAnalogAxis the same way. A retail pad masks
+ * 0xF901 - C, Z, D and the second d-pad - which is exactly the four things it
+ * does not have.
+ *
+ * The wire is untouched: a port's block is twenty controls whatever is in it,
+ * so every index in ApplyInputPort stays where it was. */
+static u32 DeviceButtonMask(MapleDeviceType type)
+{
+	switch (type)
+	{
+		/* the bits each device forces high (= not pressed) in getButtonState */
+		case MDT_SegaController:   return 0xF901; /* no C, Z, D, second d-pad */
+		case MDT_AsciiStick:       return 0xF800; /* no D, no second d-pad */
+		case MDT_TwinStick:        return 0x0101; /* no C, no Z */
+		case MDT_SegaControllerXL: return 0x0000; /* the PantherDC has all of them */
+		case MDT_LightGun:         return 0xFF01; /* a trigger, a B, Start and a d-pad */
+		default:                   return 0xFFFF; /* a mouse has no kcode at all */
+	}
+}
+
+ECL_EXPORT int IsButtonActive(int index)
+{
+	if (index < 0 || index >= BTN_COUNT) return 0;
+	const int port = index / BTN_PER_PORT;
+	const int wire = index % BTN_PER_PORT;
+	const MapleDeviceType device = g_portDevice[port];
+
+	if (wire == BTN_MOUSE_LEFT || wire == BTN_MOUSE_MIDDLE || wire == BTN_MOUSE_RIGHT)
+		return device == MDT_Mouse ? 1 : 0;
+	/* RELOAD is not a button on any controller: it is the gun's second action,
+	 * and maple_lightgun is the only thing that reads it. */
+	if (wire == BTN_RELOAD)
+		return device == MDT_LightGun ? 1 : 0;
+
+	static const u32 bit[] = {
+		DC_DPAD_UP, DC_DPAD_DOWN, DC_DPAD_LEFT, DC_DPAD_RIGHT,
+		DC_BTN_A, DC_BTN_B, DC_BTN_C, DC_BTN_X, DC_BTN_Y, DC_BTN_Z,
+		DC_BTN_D, DC_BTN_START,
+		DC_DPAD2_UP, DC_DPAD2_DOWN, DC_DPAD2_LEFT, DC_DPAD2_RIGHT,
+	};
+	if (wire >= (int)(sizeof(bit) / sizeof(bit[0]))) return 0;
+	return (DeviceButtonMask(device) & bit[wire]) == 0 ? 1 : 0;
+}
+
+ECL_EXPORT int IsAxisActive(int index)
+{
+	if (index < 0 || index >= AXIS_COUNT) return 0;
+	const int wire = index % AXIS_PER_PORT;
+	const MapleDeviceType device = g_portDevice[index / AXIS_PER_PORT];
+
+	switch (wire)
+	{
+		/* the stick and the triggers: the controller family's analog half,
+		 * which the two STICKS do not have (both answer 0x80 to every axis) */
+		case AXIS_X: case AXIS_Y: case AXIS_LTRIG: case AXIS_RTRIG:
+			return device == MDT_SegaController || device == MDT_SegaControllerXL ? 1 : 0;
+		/* the second stick is the PantherDC's alone */
+		case AXIS_X2: case AXIS_Y2:
+			return device == MDT_SegaControllerXL ? 1 : 0;
+		case AXIS_MOUSE_X: case AXIS_MOUSE_Y: case AXIS_MOUSE_WHEEL:
+			return device == MDT_Mouse ? 1 : 0;
+		case AXIS_GUN_X: case AXIS_GUN_Y:
+			return device == MDT_LightGun ? 1 : 0;
+		default:
+			return 0;
+	}
+}
+
 ECL_EXPORT void SetAxis(int index, int value)
 {
 	if (index >= 0 && index < AXIS_COUNT) g_axes[index] = (int16_t)value;
