@@ -23,6 +23,17 @@ tests/*.chimeraProject
 # Redistributable content somebody else wrote goes in tests/own/ instead, where
 # it is tracked deliberately and its terms are written down (tests/own/README.md
 # and the addendum in LICENSE). That is where the 240p Test Suite's .cdi lives.
+# RECURSIVE, because the first version of these was not: a homebrew suite that
+# ships as a FOLDER slipped straight past `tests/roms/*.cdi` and was committed.
+# tests/own/ is the deliberate home for redistributable content and is
+# unaffected - it is a different directory, tracked on purpose.
+tests/roms/**/*.chd
+tests/roms/**/*.gdi
+tests/roms/**/*.cdi
+tests/roms/**/*.cue
+tests/roms/**/*.iso
+tests/roms/**/*.raw
+tests/roms/240pSuite/
 tests/roms/*.chd
 tests/roms/*.gdi
 tests/roms/*.cdi

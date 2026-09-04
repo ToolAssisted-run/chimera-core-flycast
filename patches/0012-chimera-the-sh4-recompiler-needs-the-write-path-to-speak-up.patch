@@ -1,0 +1,93 @@
+--- a/core/hw/mem/addrspace.cpp
++++ b/core/hw/mem/addrspace.cpp
+@@ -101,6 +101,41 @@
+ 	}
+ }
+ 
++// chimera: code the game rewrites must stop being executed.
++//
++// Upstream learns that by PROTECTING the pages a compiled block came from and
++// catching the fault (bm_LockPage -> virtmem::region_lock, answered by the
++// platform's SIGSEGV handler). A sandboxed guest has neither, so the write path
++// says so itself - the same answer patch 0009 gives the texture cache, for the
++// same reason.
++//
++// The cost is one call on every write that lands in memory, and inside it a
++// range check against system RAM followed by a byte lookup in a per-page table
++// that is already true for nearly every page. With the interpreter this is not
++// compiled at all: blockmanager.h defines these as inline no-ops when
++// FEAT_SHREC is DYNAREC_NONE.
++#include "hw/sh4/dyna/blockmanager.h"
++#include "hw/sh4/sh4_mem.h"
++static inline void chimera_code_written(void *p)
++{
++#if FEAT_SHREC != DYNAREC_NONE
++	// Inline, because this is on every write that lands in memory. Two tests
++	// and no call in the case that is almost always taken: writes outside
++	// system RAM are not code, and a page that has already been written to is
++	// not protected and never becomes protected again. The out-of-line part
++	// runs once per page for the life of the cache.
++	u8 *b = (u8 *)p;
++	if (b < &mem_b[0] || b >= &mem_b[RAM_SIZE])
++		return;
++	const u32 off = (u32)(b - &mem_b[0]);
++	if (!bm_IsRamPageProtected(off))
++		return;
++	bm_RamWriteAccess(off);
++#else
++	(void)p;
++#endif
++}
++
+ template<typename T>
+ T DYNACALL readt(u32 addr)
+ {
+@@ -160,6 +195,7 @@
+ 		addr >>= iirf;
+ 
+ 		*(T *)&((u8 *)ptr)[addr] = data;
++		chimera_code_written(&((u8 *)ptr)[addr]);
+ 	}
+ 	else
+ 	{
+--- a/core/hw/sh4/sh4_mem.cpp
++++ b/core/hw/sh4/sh4_mem.cpp
+@@ -201,6 +201,22 @@
+ 	addrspace::term();
+ }
+ 
++// chimera: the block writers are how a game DMAs into RAM, and RAM is where
++// its code lives. Same reason as the single-write hook in addrspace.cpp, and
++// the same no-op with the interpreter.
++#include "hw/sh4/dyna/blockmanager.h"
++static inline void chimera_code_written_range(void *p, u32 size)
++{
++	if (p == nullptr || size == 0)
++		return;
++	u8 *b = (u8 *)p;
++	// one call per page it spans, plus the last byte, because a block can start
++	// and end mid-page
++	for (u32 off = 0; off < size; off += PAGE_SIZE)
++		bm_RamWriteAccess(b + off);
++	bm_RamWriteAccess(b + size - 1);
++}
++
+ void WriteMemBlock_nommu_dma(u32 dst, u32 src, u32 size)
+ {
+ 	chimera_vram_written_range(dst, size);
+@@ -211,6 +227,7 @@
+ 	if (dst_ismem && src_ismem)
+ 	{
+ 		memcpy(dst_ptr, src_ptr, size);
++		chimera_code_written_range(dst_ptr, size);
+ 	}
+ 	else if (src_ismem)
+ 	{
+@@ -234,6 +251,7 @@
+ 	if (dst_ismem)
+ 	{
+ 		memcpy(dst_ptr, src, size);
++		chimera_code_written_range(dst_ptr, size);
+ 	}
+ 	else
+ 	{

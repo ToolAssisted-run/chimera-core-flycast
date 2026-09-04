@@ -491,10 +491,24 @@ ECL_EXPORT int Init(void)
 		 * symptom was an instruction trace that interleaved two executions of
 		 * the same loop.
 		 *
-		 * The interpreter, not the dynarec: an equivalence gate compares
-		 * emulation, and a recompiler is a separate question (docs/PLAN.md). */
+		 * How the SH4 runs is a SETTING, because it is a different Dreamcast
+		 * either way and which one a movie was made on has to travel with it.
+		 *
+		 * jit is the default and the reference: upstream Flycast recompiles on
+		 * every desktop host, so it is the machine its users run, and it is
+		 * about four times faster here. The interpreter is the same CLOCK
+		 * (patch 0014 gives it the recompiler's cycle ratio) but NOT the same
+		 * machine - one charges cycles per instruction and the other per
+		 * compiled block, so interrupts land in different places and a movie
+		 * does not carry across.
+		 *
+		 * Both executors are compiled in; this only chooses between them. The
+		 * ARM7 and the DSP interpret either way. */
 		config::ThreadedRendering = false;
-		config::DynarecEnabled = false;
+		{
+			static const char *const cpus[] = { "jit", "interpreter" };
+			config::DynarecEnabled = SettingIndex("cpu", cpus, 2, 0) == 0;
+		}
 		config::AutoLoadState = false;
 		config::AutoSaveState = false;
 

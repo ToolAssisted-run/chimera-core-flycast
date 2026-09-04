@@ -1,0 +1,25 @@
+--- a/core/hw/sh4/sh4_interpreter.h
++++ b/core/hw/sh4/sh4_interpreter.h
+@@ -29,9 +29,21 @@
+ 
+ 	Sh4Cycles sh4cycles{CPU_RATIO};
+ 	// SH4 underclock factor when using the interpreter so that it's somewhat usable
++	//
++	// chimera: 2, not 8. The recompiler defines this core's machine - it is what
++	// upstream runs on every desktop host, and this build defaults to it - so
++	// the interpreter's job is to be the SAME Dreamcast, not a more comfortable
++	// one. Measured against it on tests/roms/counter.elf, which counts executed
++	// instructions into RAM: 300 frames give 752,140,005 recompiled and
++	// 1,504,280,008 interpreted at ratio 1, so the recompiler's effective ratio
++	// is 2 and that is what the interpreter is set to.
++	//
++	// Upstream's 8 is a playability hack for a path upstream does not default
++	// to, and it left the SH4 running at an eighth of its clock. See
++	// docs/PLAN.md.
+ #ifdef STRICT_MODE
+ 	static constexpr int CPU_RATIO = 1;
+ #else
+-	static constexpr int CPU_RATIO = 8;
++	static constexpr int CPU_RATIO = 2;
+ #endif
+ };

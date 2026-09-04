@@ -64,7 +64,9 @@ defs = [
   # config::DynarecEnabled leaves the ARM7 asking a JIT backend that is not
   # there, which is how this was found: the machine got as far as the ARM7 and
   # tripped its own assertion.)
-  '-DFEAT_SHREC=0x40000001',
+  # The ARM7 and the AICA's DSP always interpret: they are 2-4% of a frame
+  # between them, and their JIT backends bring their own page-protection
+  # assumptions for no measurable return.
   '-DFEAT_AREC=0x40000001',
   '-DFEAT_DSPREC=0x40000001',
   '-DFLYCAST_DATADIR="/"',
@@ -88,6 +90,10 @@ inc = include_directories(
   fc / 'core/deps/libchdr/deps/zstd-1.5.6/lib',
   fc / 'core/deps/libelf/include',
   fc / 'core/deps/nowide/include',
+  # xbyak, the x64 assembler the SH4 recompiler emits through. Header-only, and
+  # carried unconditionally: a conditional include path would be a second way
+  # for the two build flavors to differ.
+  fc / 'core/deps/xbyak',
   'waterbox',
   'waterbox/refsw',
   # the GPU bridge's shared contract and its generated opcodes
@@ -98,7 +104,14 @@ inc = include_directories(
 # waterbox/gl-osmesa.cpp for what it is and why it is not a GPU.
 mesa = get_option('mesa_guest_dir')
 guest_gl = mesa != ''
+# The SH4 recompiler is always COMPILED IN; which executor runs is the core's
+# `cpu` setting, because it is a different Dreamcast either way and a movie has
+# to record which one it was made on. FEAT_* are build-time decisions upstream,
+# so a backend that was never compiled could not be selected at runtime at all.
+add_project_arguments('-DFEAT_SHREC=0x40000002', language: ['c', 'cpp'])
+
 sources_env = environment()
+sources_env.set('CHIMERA_SH4_REC', '1')
 if guest_gl
   sources_env.set('CHIMERA_GUEST_MESA', mesa)
   add_project_arguments(['-DCHIMERA_GUEST_GL', '-DUSE_OPENGL', '-DCHIMERA_NO_IMGUI'], language: ['c', 'cpp'])

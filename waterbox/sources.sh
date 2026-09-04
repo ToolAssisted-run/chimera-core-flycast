@@ -49,6 +49,12 @@ hw_srcs() {
 		-e "^$fc/core/hw/naomi/naomi_m3comm" \
 		-e "_x64\.cpp$" -e "_x86\.cpp$" -e "_arm32\.cpp$" -e "_arm64\.cpp$" \
 		-e "/rec-cpp/" -e "/rec_cpp"
+	# The SH4 recompiler's x64 backend. It does not live under core/hw with the
+	# rest of the machine, so the exclusions above never saw it. Its emitted code
+	# reaches memory through the same software translation the interpreter uses -
+	# rec_x64 branches on addrspace::virtmemEnabled() - which is what makes it
+	# possible here at all, since the sandbox has no address space to give it.
+	echo "$fc/core/rec-x64/rec_x64.cpp"
 }
 
 # The emulator proper plus its support: disc images, the HLE bios, the
@@ -104,6 +110,9 @@ core_srcs() {
 	# no answer for - waterbox/stubs/vmem-stub.cpp refuses instead, and the
 	# machine takes Flycast's software translation path.
 	echo "$fc/core/linux/common.cpp"
+	# The recompiler registers unwind information for the code it emits, so a
+	# fault inside a compiled block has a stack rather than a void.
+	echo "$fc/core/linux/unwind_info.cpp"
 	# the host CPU context, which the memory system needs even when nothing
 	# ever faults
 	echo "$fc/core/linux/context.cpp"
