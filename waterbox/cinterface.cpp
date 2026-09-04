@@ -506,8 +506,10 @@ ECL_EXPORT int Init(void)
 		 * ARM7 and the DSP interpret either way. */
 		config::ThreadedRendering = false;
 		{
+			/* the fallback index must be the declared default, or a run given no
+			 * settings is a different Dreamcast from the one the package promises */
 			static const char *const cpus[] = { "jit", "interpreter" };
-			config::DynarecEnabled = SettingIndex("cpu", cpus, 2, 0) == 0;
+			config::DynarecEnabled = SettingIndex("cpu", cpus, 2, 1) == 0;
 		}
 		config::AutoLoadState = false;
 		config::AutoSaveState = false;
