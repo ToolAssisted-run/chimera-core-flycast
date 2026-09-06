@@ -1,0 +1,93 @@
+diff --git a/core/rend/gles/gles.h b/core/rend/gles/gles.h
+--- a/core/rend/gles/gles.h
++++ b/core/rend/gles/gles.h
+@@ -586,6 +586,13 @@
+ void drawVmusAndCrosshairs(int width, int height);
+ void termVmuLightgun();
+ 
++// chimera: has the GL context moved out from under the objects this renderer
++// holds? A whole-machine savestate carries their NAMES into whatever session
++// loads it, and the context that handed those names out is gone. Called at the
++// head of every path about to USE one; on a change it tears the objects down
++// and builds them again. See the definition in gles.cpp.
++void chimera_check_gl_context(OpenGLRenderer *renderer);
++
+ #ifdef LIBRETRO
+ extern "C" struct retro_hw_render_callback hw_render;
+ #endif
+diff --git a/core/rend/gles/gles.cpp b/core/rend/gles/gles.cpp
+--- a/core/rend/gles/gles.cpp
++++ b/core/rend/gles/gles.cpp
+@@ -1324,8 +1324,57 @@
+    is the frontend's policy for the moment and not part of the machine. */
+ extern "C" int chimera_render_enabled;
+ 
++#ifdef CHIMERA_GUEST_GL
++/* Which context the GL calls are landing on (miniBox source/gl:
++   GL_OP_CONTEXT_ID). Zero when there is no bridge, or the host predates the
++   question - and a renderer that cannot tell must assume nothing moved. */
++extern "C" uint64_t chimera_gl_context_id(void);
++#else
++static inline uint64_t chimera_gl_context_id(void) { return 0; }
++#endif
++
++/* chimera: the context the objects above came from; 0 before there is one.
++   One per process - there is a single GL renderer instance - so a file static
++   is enough, and a whole-machine savestate restores it like everything else,
++   which is exactly what makes the mismatch visible after a load. */
++static u64 s_chimera_gl_context = 0;
++
++/* chimera: has the ground moved? Every object this renderer holds is a NAME a
++   particular GL context handed out, and a whole-machine savestate carries
++   those names into whatever session loads it. The driver refuses every call
++   naming one and nothing says so - the bridge answers the guest, not the
++   driver - so comparing the context they came from with the one the calls are
++   landing on is the only way to notice, and building them again is the answer.
++
++   Term() drops the objects (VAOs, buffers, shaders, the fog and palette
++   textures, every framebuffer, the whole texture cache) and null s their
++   handles; Init() makes them afresh in the live context. Nothing is read back
++   from the GPU - the objects come from emulated memory, which is where they
++   came from the first time. The GL errors a teardown against a dead context
++   leaves are drained on both sides of Init, because Init's own glCheck asserts
++   a clean slate. */
++void chimera_check_gl_context(OpenGLRenderer *renderer)
++{
++	const u64 live = chimera_gl_context_id();
++	if (live == 0 || live == s_chimera_gl_context)
++		return;
++
++	if (s_chimera_gl_context != 0)
++	{
++		WARN_LOG(RENDERER, "chimera: GL objects came from context %llu, now %llu; rebuilding",
++			(unsigned long long)s_chimera_gl_context, (unsigned long long)live);
++		renderer->Term();
++		while (glGetError() != GL_NO_ERROR) {}
++		renderer->Init();
++		while (glGetError() != GL_NO_ERROR) {}
++	}
++	s_chimera_gl_context = live;
++}
++
+ bool OpenGLRenderer::Render()
+ {
++	chimera_check_gl_context(this);
++
+ 	/* chimera: turbo. A pass that renders to TEXTURE is not a picture - it is
+ 	   written back into video memory and the game reads it - so only the pass
+ 	   that would have reached a screen is skipped. Everything the SH4 can see
+diff --git a/core/rend/gles/gldraw.cpp b/core/rend/gles/gldraw.cpp
+--- a/core/rend/gles/gldraw.cpp
++++ b/core/rend/gles/gldraw.cpp
+@@ -642,6 +642,11 @@
+ 
+ void OpenGLRenderer::RenderFramebuffer(const FramebufferInfo& info)
+ {
++	// chimera: the direct-framebuffer path (a Dreamcast boot animation draws
++	// this way) reaches GL objects too, so it asks the same question Render()
++	// does before touching one.
++	chimera_check_gl_context(this);
++
+ 	gl.rendContext = nullptr;
+ 	glReadFramebuffer(info);
+ 	saveCurrentFramebuffer();
