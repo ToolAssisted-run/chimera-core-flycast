@@ -29,8 +29,33 @@ fi
 chimera_root="$(cd "$chimera_root" && pwd)"
 [ -n "$mb" ] || mb="$chimera_root/extern/tools/chimera-common-minibox"
 
-# the guest, via the meson cross build
-[ -f "$root/build/meson-guest/build.ninja" ] || MINIBOX_DIR="$mb" sh "$here/setup-guest.sh"
+# The hardware OpenGL renderer is the DEFAULT: the core links a guest Mesa
+# (softpipe + OSMesa, built by extern/tools/build-guest-mesa.sh) and runs
+# Flycast's own GL renderer against it inside the sandbox. That guest Mesa is a
+# chimera submodule sitting beside this core, at extern/tools/mesa-guest, so it
+# resolves both when this core is a submodule of chimera and when a standalone
+# CI clones chimera next to it (chimera_root points at either).
+#   MESA_GUEST_DIR=<path>  build against a guest Mesa elsewhere
+#   MESA_GUEST_DIR=        (empty) build the software-only core instead
+if [ "${MESA_GUEST_DIR+set}" = set ]; then
+	mesa_guest_dir="$MESA_GUEST_DIR"
+else
+	mesa_guest_dir="$chimera_root/extern/tools/mesa-guest"
+	[ -d "$mesa_guest_dir/build-guest2" ] || {
+		echo "guest Mesa not built at $mesa_guest_dir/build-guest2." >&2
+		echo "Run extern/tools/build-guest-mesa.sh first, or pass MESA_GUEST_DIR= (empty) for a software-only core." >&2
+		exit 1
+	}
+fi
+
+# the guest, via the meson cross build (GL renderer unless mesa_guest_dir empty)
+if [ ! -f "$root/build/meson-guest/build.ninja" ]; then
+	if [ -n "$mesa_guest_dir" ]; then
+		MINIBOX_DIR="$mb" sh "$here/setup-guest.sh" -- -Dmesa_guest_dir="$mesa_guest_dir"
+	else
+		MINIBOX_DIR="$mb" sh "$here/setup-guest.sh"
+	fi
+fi
 ninja -C "$root/build/meson-guest" core.wbx
 sh "$mb/source/guest/check-wbx.sh" "$root/build/meson-guest/core.wbx"
 

@@ -44,7 +44,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends meson ninja-build build-essential python3
+          sudo apt-get install -y --no-install-recommends meson ninja-build build-essential python3 bison flex pkg-config
 
       - name: Check out what the core actually compiles
         # Flycast is a big tree with many submodules and this core uses one of
@@ -53,9 +53,11 @@ jobs:
         # desktop application (see waterbox/sources.sh) and are never fetched.
         run: git submodule update --init --recursive --depth 1 extern/flycast/core/deps/libchdr
 
-      - name: Check out miniBox
+      - name: Check out miniBox and the guest Mesa
         working-directory: chimera-checkout
-        run: git submodule update --init extern/tools/chimera-common-minibox
+        run: |
+          git submodule update --init extern/tools/chimera-common-minibox
+          git submodule update --init extern/tools/mesa-guest
 
       - name: Cache the guest toolchain
         uses: actions/cache@v4
@@ -74,6 +76,14 @@ jobs:
           [ -f "$mb/build/meson-cpp/build.ninja" ] || meson setup "$mb/build/meson-cpp" "$mb" -Dguest_cpp=true
           meson compile -C "$mb/build/meson-cpp"
 
+      - name: Build the guest Mesa (softpipe + OSMesa) the GL renderer links
+        # Turns the shipped core into the hardware OpenGL build. Needs the
+        # meson-cpp guest sysroot from the miniBox step above; bash, not sh,
+        # because the script uses `set -o pipefail`.
+        run: |
+          MINIBOX_DIR="$PWD/chimera-checkout/extern/tools/chimera-common-minibox" \
+            bash chimera-checkout/extern/tools/build-guest-mesa.sh
+
       - name: Build the native reference and sandbox drivers
         run: |
           meson setup build/meson-native -Dminibox_dir="$PWD/chimera-checkout/extern/tools/chimera-common-minibox"
@@ -82,7 +92,8 @@ jobs:
       - name: Build the waterbox core
         run: |
           MINIBOX_DIR="$PWD/chimera-checkout/extern/tools/chimera-common-minibox" sh waterbox/setup-guest.sh \
-            -- -Dminibox_dir="$PWD/chimera-checkout/extern/tools/chimera-common-minibox"
+            -- -Dminibox_dir="$PWD/chimera-checkout/extern/tools/chimera-common-minibox" \
+               -Dmesa_guest_dir="$PWD/chimera-checkout/extern/tools/mesa-guest"
           ninja -C build/meson-guest
 
       - name: Core gate over the homebrew movie set
@@ -124,7 +135,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            meson ninja-build build-essential cmake pkg-config python3 \
+            meson ninja-build build-essential cmake pkg-config python3 bison flex \
             mono-complete xvfb \
             libgl1-mesa-dev libx11-dev libxext-dev libasound2-dev
 
@@ -171,6 +182,14 @@ jobs:
           meson compile -C "$mb/build/meson-linux"
           [ -f "$mb/build/meson-cpp/build.ninja" ] || meson setup "$mb/build/meson-cpp" "$mb" -Dguest_cpp=true
           meson compile -C "$mb/build/meson-cpp"
+
+      - name: Build the guest Mesa (softpipe + OSMesa) the GL renderer links
+        # The published package is the hardware OpenGL build: build-package.sh
+        # defaults -Dmesa_guest_dir to <chimera>/extern/tools/mesa-guest, which
+        # the recursive chimera checkout already vendored. bash, not sh.
+        run: |
+          MINIBOX_DIR="$PWD/chimera-checkout/extern/tools/chimera-common-minibox" \
+            bash chimera-checkout/extern/tools/build-guest-mesa.sh
 
       - name: Build and install the waterbox core package
         # The commit is the core's authoritative version: this build is the one
