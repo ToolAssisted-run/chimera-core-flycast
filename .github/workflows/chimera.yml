@@ -55,9 +55,13 @@ jobs:
         # them: libchdr, which reads CHD discs and brings its own zlib, zstd and
         # lzma. The rest - SDL, Vulkan headers, breakpad, asio - belong to the
         # desktop application (see waterbox/sources.sh) and are never fetched.
-        run: git submodule update --init --recursive --depth 1 extern/flycast/core/deps/libchdr
+        # -C extern/flycast: libchdr is a submodule OF flycast, at
+        # core/deps/libchdr relative to it. The superproject only knows
+        # extern/flycast, so naming the nested path from here is a pathspec git
+        # has never heard of - which is what it said, on every run since 09-04.
+        run: git -C extern/flycast submodule update --init --recursive --depth 1 core/deps/libchdr
 
-      - name: Check out miniBox and the guest Mesa
+      - name: Check out miniBox
         working-directory: chimera-checkout
         run: |
           git submodule update --init extern/chimera-common-minibox
@@ -157,7 +161,11 @@ jobs:
         run: dotnet build source/gui/Chimera.sln -c Release /nodeReuse:false -p:UseSharedCompilation=false
 
       - name: Check out what the core actually compiles
-        run: git submodule update --init --recursive --depth 1 extern/flycast/core/deps/libchdr
+        # -C extern/flycast: libchdr is a submodule OF flycast, at
+        # core/deps/libchdr relative to it. The superproject only knows
+        # extern/flycast, so naming the nested path from here is a pathspec git
+        # has never heard of - which is what it said, on every run since 09-04.
+        run: git -C extern/flycast submodule update --init --recursive --depth 1 core/deps/libchdr
 
       - name: Build the native reference
         run: |
