@@ -23,11 +23,11 @@ run_command(files('waterbox/apply-patches.sh'), check: true)
 
 mb = get_option('minibox_dir')
 if mb == ''
-  mb_candidate = meson.current_source_dir() / '../chimera/extern/tools/chimera-common-minibox'
+  mb_candidate = meson.current_source_dir() / '../chimera/extern/chimera-common-minibox'
   if import('fs').is_dir(mb_candidate)
     mb = mb_candidate
   else
-    error('pass -Dminibox_dir=<miniBox checkout> (or keep one at ../chimera/extern/tools/chimera-common-minibox)')
+    error('pass -Dminibox_dir=<miniBox checkout> (or keep one at ../chimera/extern/chimera-common-minibox)')
   endif
 endif
 
