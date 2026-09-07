@@ -27,12 +27,12 @@ fi
 [ -n "$chimera_root" ] && [ -d "$chimera_root" ] || {
 	echo "chimera checkout not found; pass -r <path>" >&2; exit 1; }
 chimera_root="$(cd "$chimera_root" && pwd)"
-[ -n "$mb" ] || mb="$chimera_root/extern/tools/chimera-common-minibox"
+[ -n "$mb" ] || mb="$chimera_root/extern/chimera-common-minibox"
 
 # The hardware OpenGL renderer is the DEFAULT: the core links a guest Mesa
-# (softpipe + OSMesa, built by extern/tools/build-guest-mesa.sh) and runs
+# (softpipe + OSMesa, built by waterbox/setup-mesa.sh) and runs
 # Flycast's own GL renderer against it inside the sandbox. That guest Mesa is a
-# chimera submodule sitting beside this core, at extern/tools/mesa-guest, so it
+# chimera submodule sitting beside this core, at extern/mesa-guest, so it
 # resolves both when this core is a submodule of chimera and when a standalone
 # CI clones chimera next to it (chimera_root points at either).
 #   MESA_GUEST_DIR=<path>  build against a guest Mesa elsewhere
@@ -40,10 +40,10 @@ chimera_root="$(cd "$chimera_root" && pwd)"
 if [ "${MESA_GUEST_DIR+set}" = set ]; then
 	mesa_guest_dir="$MESA_GUEST_DIR"
 else
-	mesa_guest_dir="$chimera_root/extern/tools/mesa-guest"
+	mesa_guest_dir="$root/build/mesa"
 	[ -d "$mesa_guest_dir/build-guest2" ] || {
 		echo "guest Mesa not built at $mesa_guest_dir/build-guest2." >&2
-		echo "Run extern/tools/build-guest-mesa.sh first, or pass MESA_GUEST_DIR= (empty) for a software-only core." >&2
+		echo "Run ./waterbox/setup-mesa.sh first, or pass MESA_GUEST_DIR= (empty) for a software-only core." >&2
 		exit 1
 	}
 fi

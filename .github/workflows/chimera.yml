@@ -60,20 +60,19 @@ jobs:
       - name: Check out miniBox and the guest Mesa
         working-directory: chimera-checkout
         run: |
-          git submodule update --init extern/tools/chimera-common-minibox
-          git submodule update --init extern/tools/mesa-guest
+          git submodule update --init extern/chimera-common-minibox
 
       - name: Cache the guest toolchain
         uses: actions/cache@v4
         with:
           path: |
-            chimera-checkout/extern/tools/chimera-common-minibox/build/meson-linux
-            chimera-checkout/extern/tools/chimera-common-minibox/build/meson-cpp
-          key: guest-cpp-${{ runner.os }}-${{ hashFiles('chimera-checkout/extern/tools/chimera-common-minibox/.git') }}-${{ hashFiles('chimera-checkout/extern/tools/chimera-common-minibox/meson.build') }}
+            chimera-checkout/extern/chimera-common-minibox/build/meson-linux
+            chimera-checkout/extern/chimera-common-minibox/build/meson-cpp
+          key: guest-cpp-${{ runner.os }}-${{ hashFiles('chimera-checkout/extern/chimera-common-minibox/.git') }}-${{ hashFiles('chimera-checkout/extern/chimera-common-minibox/meson.build') }}
 
       - name: Build miniBox (host + guest toolchain)
         run: |
-          mb="$PWD/chimera-checkout/extern/tools/chimera-common-minibox"
+          mb="$PWD/chimera-checkout/extern/chimera-common-minibox"
           # the host library, plus the C++ guest toolchain Flycast needs
           [ -f "$mb/build/meson-linux/build.ninja" ] || meson setup "$mb/build/meson-linux" "$mb"
           meson compile -C "$mb/build/meson-linux"
@@ -81,23 +80,21 @@ jobs:
           meson compile -C "$mb/build/meson-cpp"
 
       - name: Build the guest Mesa (softpipe + OSMesa) the GL renderer links
-        # Turns the shipped core into the hardware OpenGL build. Needs the
-        # meson-cpp guest sysroot from the miniBox step above; bash, not sh,
-        # because the script uses `set -o pipefail`.
-        run: |
-          MINIBOX_DIR="$PWD/chimera-checkout/extern/tools/chimera-common-minibox" \
-            bash chimera-checkout/extern/tools/build-guest-mesa.sh
+        # This core fetches and builds its own, pinned by SHA256 to mesa
+        # 24.0.9 - Chimera used to carry it as a submodule and does not any
+        # more. bash, not sh: the script uses `set -o pipefail`.
+        run: bash waterbox/setup-mesa.sh -m "$PWD/chimera-checkout/extern/chimera-common-minibox"
 
       - name: Build the native reference and sandbox drivers
         run: |
-          meson setup build/meson-native -Dminibox_dir="$PWD/chimera-checkout/extern/tools/chimera-common-minibox"
+          meson setup build/meson-native -Dminibox_dir="$PWD/chimera-checkout/extern/chimera-common-minibox"
           ninja -C build/meson-native
 
       - name: Build the waterbox core
         run: |
-          MINIBOX_DIR="$PWD/chimera-checkout/extern/tools/chimera-common-minibox" sh waterbox/setup-guest.sh \
-            -- -Dminibox_dir="$PWD/chimera-checkout/extern/tools/chimera-common-minibox" \
-               -Dmesa_guest_dir="$PWD/chimera-checkout/extern/tools/mesa-guest"
+          MINIBOX_DIR="$PWD/chimera-checkout/extern/chimera-common-minibox" sh waterbox/setup-guest.sh \
+            -- -Dminibox_dir="$PWD/chimera-checkout/extern/chimera-common-minibox" \
+               -Dmesa_guest_dir="$PWD/build/mesa"
           ninja -C build/meson-guest
 
       - name: Core gate over the homebrew movie set
@@ -164,7 +161,7 @@ jobs:
 
       - name: Build the native reference
         run: |
-          meson setup build/meson-native -Dminibox_dir="$PWD/chimera-checkout/extern/tools/chimera-common-minibox"
+          meson setup build/meson-native -Dminibox_dir="$PWD/chimera-checkout/extern/chimera-common-minibox"
           # run-native only: the frontend gate compares Chimera against the
           # native reference and never runs the sandbox driver, which would
           # drag in a miniBox host build this job has no reason to do.
@@ -174,13 +171,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            chimera-checkout/extern/tools/chimera-common-minibox/build/meson-linux
-            chimera-checkout/extern/tools/chimera-common-minibox/build/meson-cpp
-          key: guest-cpp-${{ runner.os }}-${{ hashFiles('chimera-checkout/extern/tools/chimera-common-minibox/.git') }}-${{ hashFiles('chimera-checkout/extern/tools/chimera-common-minibox/meson.build') }}
+            chimera-checkout/extern/chimera-common-minibox/build/meson-linux
+            chimera-checkout/extern/chimera-common-minibox/build/meson-cpp
+          key: guest-cpp-${{ runner.os }}-${{ hashFiles('chimera-checkout/extern/chimera-common-minibox/.git') }}-${{ hashFiles('chimera-checkout/extern/chimera-common-minibox/meson.build') }}
 
       - name: Build miniBox (host + guest toolchain)
         run: |
-          mb="$PWD/chimera-checkout/extern/tools/chimera-common-minibox"
+          mb="$PWD/chimera-checkout/extern/chimera-common-minibox"
           # the host library, plus the C++ guest toolchain Flycast needs
           [ -f "$mb/build/meson-linux/build.ninja" ] || meson setup "$mb/build/meson-linux" "$mb"
           meson compile -C "$mb/build/meson-linux"
@@ -188,12 +185,10 @@ jobs:
           meson compile -C "$mb/build/meson-cpp"
 
       - name: Build the guest Mesa (softpipe + OSMesa) the GL renderer links
-        # The published package is the hardware OpenGL build: build-package.sh
-        # defaults -Dmesa_guest_dir to <chimera>/extern/tools/mesa-guest, which
-        # the recursive chimera checkout already vendored. bash, not sh.
-        run: |
-          MINIBOX_DIR="$PWD/chimera-checkout/extern/tools/chimera-common-minibox" \
-            bash chimera-checkout/extern/tools/build-guest-mesa.sh
+        # This core fetches and builds its own, pinned by SHA256 to mesa
+        # 24.0.9 - Chimera used to carry it as a submodule and does not any
+        # more. bash, not sh: the script uses `set -o pipefail`.
+        run: bash waterbox/setup-mesa.sh -m "$PWD/chimera-checkout/extern/chimera-common-minibox"
 
       - name: Build and install the waterbox core package
         # The commit is the core's authoritative version: this build is the one
@@ -201,7 +196,7 @@ jobs:
         # cite. A package built by hand stamps "+local" instead.
         env:
           CORE_VERSION: ${{ github.sha }}
-        run: ./waterbox/build-package.sh -m "$PWD/chimera-checkout/extern/tools/chimera-common-minibox" -r "$PWD/chimera-checkout"
+        run: ./waterbox/build-package.sh -m "$PWD/chimera-checkout/extern/chimera-common-minibox" -r "$PWD/chimera-checkout"
 
       - name: Frontend gate
         run: ./waterbox/tests/run-frontend.sh --chimera-root "$GITHUB_WORKSPACE/chimera-checkout"
