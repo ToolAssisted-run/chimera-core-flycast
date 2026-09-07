@@ -96,9 +96,15 @@ inc = include_directories(
   fc / 'core/deps/xbyak',
   'waterbox',
   'waterbox/refsw',
-  # the GPU bridge's shared contract and its generated opcodes
-  mb / 'source/gl',
 )
+
+# The GPU bridge's shared contract and its generated opcodes, as a -I rather
+# than an include_directories() entry: meson refuses to make an absolute path
+# to a directory inside the source tree, and in CI the Chimera checkout (and so
+# miniBox) sits inside this repository's workspace. On a developer's machine it
+# is ~/chimera, outside the tree, which is why this configured here and nowhere
+# else.
+add_project_arguments('-I' + mb / 'source/gl', language: ['c', 'cpp'])
 
 # A guest Mesa turns on Flycast's own OpenGL renderer: see
 # waterbox/gl-osmesa.cpp for what it is and why it is not a GPU.
