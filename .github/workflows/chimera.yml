@@ -11,6 +11,10 @@ on:
   push:
     branches: [ "main" ]
   workflow_dispatch:
+  schedule:
+    # 04:00 UTC. A nightly is published only when main moved since the last one;
+    # the reusable workflow checks, so an unchanged core costs one idle run.
+    - cron: '0 4 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -216,3 +220,23 @@ jobs:
         with:
           name: frontend-gate-work
           path: waterbox/tests/work/
+
+  publish:
+    # What the gates passed, published as this core's own release: a rolling
+    # `dev` on every green push to main, an immutable `nightly-YYYY-MM-DD` from
+    # the scheduled run. Chimera ships no cores; its Core Manager downloads
+    # them from here.
+    #
+    # The logic is Chimera's tools/publish-core.sh, called through one reusable
+    # workflow, so all fifteen cores publish the same way and there is one place
+    # to change it.
+    name: publish
+    needs: [ core-gate, frontend-gate ]
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: write
+    uses: ToolAssisted-run/chimera/.github/workflows/publish-core.yml@main
+    with:
+      core-id: flycast
+      artifact: flycast-${{ github.sha }}
+      package: flycast.chimeraCore
