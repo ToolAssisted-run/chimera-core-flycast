@@ -373,6 +373,16 @@ Chimera's firmware channel once the machine runs.
 
 ## Log
 
+- **2026-09-11** The software renderer is the default. Asked for: the hardware
+  path has been unstable in use, and a Dreamcast does not need it. skmp's
+  rasteriser runs entirely inside the sandbox, so the picture is the machine's
+  rather than a driver's - Re-Volt at frame 1500 is byte-identical run to run
+  in both the picture and System RAM, and the RAM is the same digest the GPU
+  runs produced, so the machine does not notice which renderer drew. The cost
+  is about half the speed: 1500 frames drawing every one of them is 28s here
+  against 15s on a GTX 1060, which is still comfortably faster than real time.
+  `opengl-hw` is still there for anyone who wants it.
+
 - **2026-09-11** Turbo was skipping the wrong half, and it cost a whole screen.
   Patch 0010 returns from `OpenGLRenderer::Render` before the pass that reaches
   a screen, which is right for a renderer that composes each frame out of the
