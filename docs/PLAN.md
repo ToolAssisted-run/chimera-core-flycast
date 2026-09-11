@@ -373,6 +373,24 @@ Chimera's firmware channel once the machine runs.
 
 ## Log
 
+- **2026-09-11** Turbo was skipping the wrong half, and it cost a whole screen.
+  Patch 0010 returns from `OpenGLRenderer::Render` before the pass that reaches
+  a screen, which is right for a renderer that composes each frame out of the
+  machine - and wrong for this one, whose picture lives on the far side of the
+  GPU bridge and stays there. Re-Volt paints its title screen once around frame
+  1350 and then leaves it alone; a seek to frame 1500 showed the SEGA licence
+  screen, 72.60% of the picture different, and drawing the last 1, 2, 4, 8, 30,
+  60 or 120 frames first changed nothing - only 300, far enough back to include
+  the frame that painted it. System RAM, VRAM and sound RAM were byte-identical
+  throughout: the machine was never wrong, only the picture. The package now
+  declares `video.drawEveryFrame`, so Chimera's engine never sends
+  `SetRenderingEnabled(0)` and turbo skips the readback alone. It costs
+  essentially nothing - 1500 frames on a GTX 1060: 14.8s turbo, 15.0s drawing,
+  17.5s drawing AND reading back, because the 1.2 MB `glReadPixels` across the
+  bridge was always the expensive part. Three rewinds now land byte-identical.
+  Also measured, on the same hardware: Re-Volt and the 240p Suite are
+  deterministic run to run and across a rewind in every memory domain.
+
 - **2026-08-30** Four ports, and a device setting for each. `port1`..`port4`
   take none, gamepad, arcadeStick, twinStick, xl, mouse or lightGun; the
   declared controls are the union of all of them, per player, because the
