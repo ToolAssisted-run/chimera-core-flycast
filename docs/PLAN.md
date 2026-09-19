@@ -228,6 +228,34 @@ Chimera's firmware channel once the machine runs.
 
 ## Sharp edges hit
 
+- **Every decoder must agree where blue is, and one did not** (2026-09-19,
+  chimera#90). The frontend is handed the framebuffer's bytes as they are -
+  blue, green, red, alpha - and refsw's direct decoders all put blue in the
+  low byte (`ARGB1555_32` shifts its blue bits to 3 and its red to 19). Its
+  `packRGB`, which nothing but the YUV path uses, put RED there instead, so a
+  YUV texture came out with red and blue exchanged: a yellow sky turned blue.
+  YUV is what a Dreamcast's video decoder writes, so only cutscenes showed it
+  and no ordinary geometry did - which is why every gate so far was green.
+  `tests/refsw/test-texfmt.cpp` now decodes one known colour through every
+  format and checks which byte each channel lands in; it needs no machine and
+  runs as the gate's second leg. TRAP while writing it: these decoders are
+  MACROS whose argument is not parenthesised, so `ARGB4444_32(0xF000 | (15 << 8))`
+  shifts the wrong half of the expression and reads an opaque texel as
+  transparent. Put the word in a variable first.
+- **A paletted texture was looked up in the PVR's registers, not in a
+  palette** (same day). refsw returned `PALETTE_RAM[idx]` - the palette
+  REGISTER - as the texel, which is a colour only when the game loaded its
+  palette in ARGB8888; in the other three formats (`PAL_RAM_CTRL` says which)
+  the register holds a 16-bit 1555/565/4444 value and every paletted texture
+  came out nearly black. Flycast unpacks the palette for its own renderers
+  into `palette32_ram`, but in the GL order (red low), which is not this
+  core's. So the driver keeps its own - `chimera_refsw_palette`, rebuilt once
+  per frame in `refsw-renderer.cpp` with refsw's own macros - and
+  `refsw/refsw-host.h` points refsw at it. No disc here exercises it (Re-Volt,
+  Unreal Tournament and Prince of Persia use no paletted textures at all, and
+  `PAL_RAM_CTRL` stays 0), so it is fixed by construction and the decoder test
+  pins the order; a game of paletted sprites is what would prove it.
+
 - **A sandbox has `naomi.zip` and not `./naomi.zip`.** Flycast joins its data
   directory onto a file name with a separator between, and the data
   directory was `"./"`, so every bios lookup asked for `./naomi.zip` - which a
@@ -455,6 +483,11 @@ Chimera's firmware channel once the machine runs.
   a game worth recording.
 
 ## Log
+
+- **2026-09-19** Colours in the software renderer: the YUV packer and the
+  paletted lookup, both above. Re-Volt's picture is byte-identical before and
+  after (it uses neither format), which is what says the fix is confined to
+  what was wrong.
 
 - **2026-09-19** M6: the arcade boards. See the milestone for what shipped;
   the numbers: SFZ3 Upper 3600 frames in 148 s natively (interpreter, software

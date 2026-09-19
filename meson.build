@@ -234,6 +234,13 @@ else
     link_with: [deps_lib, refsw_lib],
     dependencies: [threads, dl, m])
 
+  # the texture decoders on their own: every format must put blue in the same
+  # byte, which is what a YUV cutscene found out the hard way (chimera#90)
+  executable('test-texfmt', files('tests/refsw/test-texfmt.cpp'),
+    include_directories: [inc, include_directories('waterbox')],
+    cpp_args: ['-include', meson.current_source_dir() / 'waterbox/refsw/refsw-host.h'],
+    link_with: [deps_lib, refsw_lib])
+
   # the zip reader on its own, against zips tests/zip/make-testzip.py writes;
   # run-gate.sh runs it as its first leg
   executable('test-zipfile', files('tests/zip/test-zipfile.cpp', 'waterbox/zipfile.cpp'),

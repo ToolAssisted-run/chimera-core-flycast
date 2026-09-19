@@ -63,6 +63,21 @@ else
 	report "zip:reader" FAIL "no test-zipfile in $nat (rebuild the native reference)"
 fi
 
+# ---- the texture decoders, before any machine ------------------------------
+# Every format must put blue in the same byte, because the frontend reads those
+# bytes directly. libswirl's YUV packer put red there instead, so cutscenes -
+# the one thing a Dreamcast draws from YUV - came out with red and blue
+# exchanged (chimera#90). Needs no machine and no disc.
+if [ -x "$nat/test-texfmt" ]; then
+	if out="$("$nat/test-texfmt" 2>&1)"; then
+		report "texfmt:order" PASS "$(grep -c '^PASS ' <<< "$out") checks: every format puts blue in the low byte"
+	else
+		report "texfmt:order" FAIL "$(grep '^FAIL ' <<< "$out" | head -3 | tr '\n' ';')"
+	fi
+else
+	report "texfmt:order" FAIL "no test-texfmt in $nat (rebuild the native reference)"
+fi
+
 # name program frames [noturbo]
 #
 # noturbo: the program draws ONE frame and then spins forever (see

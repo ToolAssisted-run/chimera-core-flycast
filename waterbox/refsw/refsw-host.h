@@ -6,9 +6,13 @@
  * writes them back out to video memory - exactly as the hardware does, and
  * exactly what a sandbox needs, because it asks for no GPU at all.
  *
- * The vendored files are UNMODIFIED. Everything they need that libswirl spelled
- * differently is spelled here instead, which keeps "what did we change to make
- * this work" answerable: nothing, so far.
+ * Everything the vendored files need that libswirl spelled differently is
+ * spelled here instead, which keeps "what did we change to make this work"
+ * answerable. TWO things are changed in the files themselves, both because
+ * they are wrong for this core's colour order rather than merely different:
+ * TexUtils.h's packRGB (the YUV path put red in the low byte where every
+ * other decoder puts blue), and the palette below. Both carry a comment
+ * saying so.
  */
 #pragma once
 
@@ -84,6 +88,22 @@ union HALF_OFFSET_type {
  * them builds this). refsw keeps its own rather than borrowing Flycast's, so
  * it gets its own name. */
 #define detwiddle refsw_detwiddle
+
+/* CHIMERA: the palette a paletted texture is looked up in.
+ *
+ * refsw reads PALETTE_RAM - the PVR's palette registers - and hands the word
+ * back as the texel. That is only a colour when the palette is in ARGB8888;
+ * in the other three formats (PAL_RAM_CTRL says which) the word is a 16-bit
+ * 1555, 565 or 4444 value, and handing it over as a 32-bit colour makes every
+ * paletted texture nearly black. Flycast unpacks the palette for its own
+ * renderers into palette32_ram, but in the GL byte order (red low), which is
+ * not this core's. So the driver keeps its own, unpacked with refsw's own
+ * macros - the ones that put blue in the low byte - and refsw reads that.
+ * chimera_refsw_palette is filled once per frame in waterbox/refsw-renderer.cpp.
+ */
+extern u32 chimera_refsw_palette[1024];
+#undef PALETTE_RAM
+#define PALETTE_RAM chimera_refsw_palette
 
 /* libswirl's structured logging. A core has a frontend to talk to, not a
  * console, and a rasteriser that logs every tile is a rasteriser nobody can

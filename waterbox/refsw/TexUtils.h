@@ -30,9 +30,19 @@ pixel_type cclamp(pixel_type minv, pixel_type maxv, pixel_type x) {
 
 #define ARGB8888_32( word ) ( word )
 
+/* CHIMERA: B in the low byte, not R.
+ *
+ * Every other decoder in this file puts the BLUE channel in the low byte -
+ * ARGB1555_32 shifts its 5 blue bits to 3, its red bits to 19 - which is the
+ * order this core's framebuffer and Flycast's own DirectX packer use (byte 0
+ * blue, byte 1 green, byte 2 red). libswirl's packRGB put red there instead,
+ * so a YUV texture, and only a YUV texture, came out with its red and blue
+ * exchanged: a yellow sky turned blue (ToolAssisted-run/chimera#90). YUV is
+ * the format a Dreamcast video decoder writes, so it is cutscenes that showed
+ * it and no ordinary geometry did. */
 static u32 packRGB(u8 R,u8 G,u8 B)
 {
-	return (R << 0) | (G << 8) | (B << 16) | 0xFF000000;
+	return (B << 0) | (G << 8) | (R << 16) | 0xFF000000;
 }
 
 static u32 YUV422(s32 Y,s32 Yu,s32 Yv)
