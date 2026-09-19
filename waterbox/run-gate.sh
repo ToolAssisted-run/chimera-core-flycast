@@ -338,6 +338,86 @@ PYSHAPE
 	fi
 fi
 
+# ---- the picture, and ONLY the picture --------------------------------------
+# internalResolution and textureFiltering are declared as settings that change
+# how Flycast's OpenGL renderer draws and nothing whatever else, so a project
+# may raise them for an encode and its movie replays unchanged. That is a claim
+# about the MACHINE, and this is where it is made good: the same program is run
+# at every value and everything the machine is - all four memory domains, the
+# audio it produced, how many frames went unpolled - must come back byte for
+# byte identical, while the picture does not.
+#
+# Both halves matter. A setting that was quietly ignored would pass the first
+# half perfectly, so the second half insists the renderer really did change what
+# it drew: three scales, three different frames, at exactly the sizes asked for.
+#
+# SANDBOX ONLY, and not for want of trying: the OpenGL renderer needs the Mesa
+# built for the guest (-Dmesa_guest_dir), so the native reference has the
+# reference rasteriser and nothing else and would draw 640x480 whatever it was
+# told. Everything compared here is one build against itself.
+#
+# What it does NOT witness is the filter changing a picture, because no program
+# in this repository draws a TEXTURE yet (docs/PLAN.md, what remains) and an
+# untextured triangle looks the same however it would have been sampled. The
+# filter's half of the leg is therefore the machine half only, which is the half
+# the package's promise rests on.
+gfx="$work/graphics"
+if [ -d "$work/triangle" ]; then
+	mkdir -p "$gfx"
+	cp "$root/tests/roms/triangle.elf" "$gfx/"
+	printf '{"disc":["triangle.elf"]}' > "$gfx/slots"
+
+	# <name> <settings json>; the first is the baseline every other is held to
+	gfxRun() {
+		printf '%s' "$2" > "$gfx/settings"
+		"$nat/run-wbx" "$gst/core.wbx" "$gfx" --frames 30 \
+			--screenshot "$work/gfx.$1.tga" 2>/dev/null > "$work/gfx.$1.txt"
+		# the machine, with the picture taken out of it
+		grep -E '^(frames|vsync|audioHash|audioFrames|lagFrames|domain\[)' "$work/gfx.$1.txt" > "$work/gfx.$1.machine"
+		sed -n 's/^videoHash=//p' "$work/gfx.$1.txt"
+	}
+	gfxSize() {
+		python3 -c 'import struct,sys
+d = open(sys.argv[1], "rb").read()
+print("%dx%d" % struct.unpack("<HH", d[12:16]))' "$work/gfx.$1.tga" 2>/dev/null
+	}
+
+	base="$(gfxRun base '{"renderer":"opengl"}')"
+	if [ ! -s "$work/gfx.base.machine" ] || [ -z "$base" ]; then
+		report "picture:onlyThePicture" FAIL "the baseline run produced no digests"
+	elif [ "$(gfxSize base)" != "640x480" ]; then
+		# no guest Mesa: 'opengl' fell back to the rasteriser, which has neither
+		# knob, so there is nothing here to hold to anything
+		report "picture:onlyThePicture" SKIP "built without -Dmesa_guest_dir; the OpenGL renderer these settings steer is not in this core"
+	else
+		differ=""
+		sizes="640x480"
+		bad=""
+		for v in '2x 1280x960' '3x 1920x1440'; do
+			read -r scale want <<< "$v"
+			hash="$(gfxRun "$scale" "$(printf '{"renderer":"opengl","internalResolution":"%s"}' "$scale")")"
+			cmp -s "$work/gfx.base.machine" "$work/gfx.$scale.machine" \
+				|| bad="$bad internalResolution=$scale changed the machine:$(diff "$work/gfx.base.machine" "$work/gfx.$scale.machine" | tr '\n' ' ' | head -c 80);"
+			got="$(gfxSize "$scale")"
+			[ "$got" = "$want" ] || bad="$bad internalResolution=$scale drew $got, wanted $want;"
+			case "$differ" in *"$hash"*) bad="$bad internalResolution=$scale drew the same picture as another scale;" ;; esac
+			differ="$differ $hash"
+			sizes="$sizes $got"
+		done
+		case "$differ" in *"$base"*) bad="$bad raising the resolution did not change the picture;" ;; esac
+		for filter in nearest linear; do
+			gfxRun "$filter" "$(printf '{"renderer":"opengl","textureFiltering":"%s"}' "$filter")" >/dev/null
+			cmp -s "$work/gfx.base.machine" "$work/gfx.$filter.machine" \
+				|| bad="$bad textureFiltering=$filter changed the machine:$(diff "$work/gfx.base.machine" "$work/gfx.$filter.machine" | tr '\n' ' ' | head -c 80);"
+		done
+		if [ -z "$bad" ]; then
+			report "picture:onlyThePicture" PASS "$sizes and both filters: one machine, four pictures"
+		else
+			report "picture:onlyThePicture" FAIL "$(printf '%s' "$bad" | head -c 200)"
+		fi
+	fi
+fi
+
 # ---- the disc --------------------------------------------------------------
 # A GD-ROM this repository builds from scratch (tests/make-testdisc.py): three
 # tracks, an ISO9660 filesystem at LBA 45000, an IP.BIN bootstrap naming

@@ -74,13 +74,24 @@ bool chimera_gl_available() { return g_glUp; }
  */
 #define DC_WIDTH 640
 #define DC_HEIGHT 480
-/* the buffer holds a 640x480 frame either way up: a vertical arcade game is
- * turned in GetVideoBgra and comes out 480x640 */
-#define VIDEO_CAPACITY (DC_WIDTH * DC_WIDTH)
+/* How far above the machine's own 640x480 the OpenGL renderers may be asked to
+ * draw (the internalResolution setting). The buffer is declared for the largest
+ * of those, and costs a project that draws at 1x nothing: a savestate carries
+ * only the pages that were WRITTEN (miniBox docs/MACHINE-SPEC.md), and the rows
+ * beyond the frame are never touched. waterbox.config's video.width/height must
+ * match DC_WIDTH * MAX_SCALE, because the host clamps the live size to them. */
+#define MAX_SCALE 3
+/* the buffer holds a frame either way up: a vertical arcade game is turned in
+ * GetVideoBgra and comes out 480x640 (3x: 1440x1920) */
+#define VIDEO_CAPACITY (DC_WIDTH * MAX_SCALE * DC_WIDTH * MAX_SCALE)
 #define MAX_SAMPLES 8192
 
 static char g_loadError[512];
 static uint32_t g_video[VIDEO_CAPACITY];
+/* the internalResolution setting, as a multiplier: 1 unless a GL renderer came
+ * up and the project asked for more. The software rasteriser cannot draw above
+ * native, so it leaves this at 1 whatever the setting says. */
+static int g_videoScale = 1;
 /* the rotation setting: turn a vertical arcade game's frame (see RotateForCabinet) */
 static bool g_rotateForCabinet;
 /* waterbox/zip-archive.cpp: why the last archive would not open */
@@ -846,6 +857,45 @@ ECL_EXPORT int Init(void)
 					fprintf(stderr, "chimera: OpenGL would not start, drawing in software\n");
 			}
 		}
+
+		/* THE PICTURE, AND ONLY THE PICTURE.
+		 *
+		 * Both of these change how Flycast's own renderer draws and nothing
+		 * else, which is a claim this repository's gate makes good on rather
+		 * than asserts: picture:resolution and picture:filter run the same
+		 * program twice and require all four memory domains to come out
+		 * identical while the frame differs.
+		 *
+		 * That is not a courtesy of the renderer, it is upstream's design.
+		 * getScaledFramebufferSize (core/rend/transform_matrix.cpp) upscales
+		 * the frame on its way to a SCREEN, and upscales a render-to-texture
+		 * pass only while config::RenderToTextureBuffer is off - the case where
+		 * the result stays on the far side of the renderer and the SH4 never
+		 * sees it. The moment that pass is copied back into video memory,
+		 * upstream draws it at the machine's own size; and EmulateFramebuffer,
+		 * which writes every frame back into video memory, turns upscaling off
+		 * altogether. Flycast forces both of those on for the dozen or so games
+		 * that read their own picture (core/emulator.cpp), so those games draw
+		 * at 1x whatever this says, which is the right answer.
+		 *
+		 * The filter is a sampler state and cannot reach video memory at all
+		 * EXCEPT through that same render-to-texture copy, so for those same
+		 * games it is part of the machine and this says so in the package.
+		 *
+		 * Neither applies without one of the OpenGL renderers: the reference
+		 * rasteriser beside them draws the machine's own 640x480 and samples
+		 * the way the PVR does, and has no knob for either. */
+		if (g_glUp)
+		{
+			static const char *const scales[] = { "1x", "2x", "3x" };
+			g_videoScale = SettingIndex("internalResolution", scales, MAX_SCALE, 0) + 1;
+			config::RenderResolution = DC_HEIGHT * g_videoScale;
+
+			/* 0 default, 1 force nearest, 2 force linear - the order upstream
+			 * reads them in (core/cfg/option.h), and the order declared */
+			static const char *const filters[] = { "machine", "nearest", "linear" };
+			config::TextureFiltering = SettingIndex("textureFiltering", filters, 3, 0);
+		}
 #endif
 
 		/* Bring the renderer up. On a desktop this is the graphics context's
@@ -1040,8 +1090,12 @@ ECL_EXPORT uint32_t *GetVideoBgra(void)
 		int w = 0, h = 0;
 		if (renderer != nullptr && renderer->GetLastFrame(rgb, w, h) && w > 0 && h > 0)
 		{
-			if (w > DC_WIDTH) w = DC_WIDTH;
-			if (h > DC_HEIGHT) h = DC_HEIGHT;
+			/* the frame the renderer drew, at whatever internalResolution
+			 * asked for - never larger than the buffer declared for the
+			 * largest scale, because the host clamps to that too */
+			if (w > DC_WIDTH * g_videoScale) w = DC_WIDTH * g_videoScale;
+			if (h > DC_HEIGHT * g_videoScale) h = DC_HEIGHT * g_videoScale;
+			if ((size_t)w * h > VIDEO_CAPACITY) { h = VIDEO_CAPACITY / w; }
 			g_videoWidth = w;
 			g_videoHeight = h;
 

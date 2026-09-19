@@ -484,6 +484,35 @@ Chimera's firmware channel once the machine runs.
 
 ## Log
 
+- **2026-09-19** Internal resolution and texture filtering, for the OpenGL
+  renderers (chimera#102). Both are picture settings and the gate says so:
+  `picture:onlyThePicture` runs triangle.elf at 1x, 2x and 3x and at both
+  forced filters, and requires System RAM, VRAM, sound RAM, the flash, the
+  audio and the lag count to come back byte for byte identical while the three
+  scales draw three different frames at exactly 640x480, 1280x960 and
+  1920x1440. That is not a courtesy of the renderer; upstream refuses to
+  upscale a frame the machine will read. `getScaledFramebufferSize`
+  (transform_matrix.cpp) upscales a render-to-texture pass only while
+  `RenderToTextureBuffer` is off - the case where the result never reaches
+  video memory - and `EmulateFramebuffer`, which writes every frame back to
+  video memory, disables upscaling outright. Flycast turns both of those on by
+  product id for the games that read their own picture (Silent Scope, Cosmic
+  Smash, Densha de Go! 2 and the rest), so those games draw at 1x whatever the
+  setting says. The filter is a sampler state and reaches video memory only
+  through that same copy, so on those titles alone it is part of the machine,
+  and the declaration says so rather than pretending otherwise.
+  The declared buffer grew from 640x640 to 1920x1920 and the guest's frame
+  buffer with it, because the readback used to CROP anything above 640x480 to
+  640x480. That capacity is what the host reserves; a savestate carries only
+  the pages that were written, so a project at 1x costs what it always did.
+  Neither setting does anything under the reference rasteriser, which draws the
+  machine's own 640x480 and samples the way the PVR does - the first sentence
+  of each description says so. What the leg does not witness is the filter
+  changing a picture, because nothing here draws a texture yet (see What
+  remains); its half of the leg is the machine half. Sandbox only: the OpenGL
+  renderer needs the guest Mesa, so the native reference would draw 640x480
+  whatever it was told.
+
 - **2026-09-19** Colours in the software renderer: the YUV packer and the
   paletted lookup, both above. Re-Volt's picture is byte-identical before and
   after (it uses neither format), which is what says the fix is confined to
