@@ -127,7 +127,11 @@ sources_sh = files('waterbox/sources.sh')
 core_sources = files(run_command(sources_sh, 'main', env: sources_env, check: true).stdout().strip().split('\n'))
 dep_sources = files(run_command(sources_sh, 'deps', env: sources_env, check: true).stdout().strip().split('\n'))
 
-deps_lib = static_library('flycast-deps', dep_sources, include_directories: inc)
+# zlib's gz* files call read/write/lseek and rely on ./configure to have said
+# where they are declared; nobody configured this copy, and gcc 14 makes the
+# implicit declaration an error. Both flavours have unistd.h.
+deps_lib = static_library('flycast-deps', dep_sources, include_directories: inc,
+  c_args: ['-DZ_HAVE_UNISTD_H'])
 
 # refsw is vendored UNMODIFIED (BSD-3, see waterbox/refsw/license/bsd), so
 # everything it expects of its host arrives through a forced include rather
@@ -142,7 +146,8 @@ refsw_lib = static_library('refsw',
 # refuses and why; none of them patch upstream.
 driver_sources = files(
   'waterbox/cinterface.cpp',
-  'waterbox/stubs/archive-stub.cpp',
+  'waterbox/zip-archive.cpp',
+  'waterbox/zipfile.cpp',
   'waterbox/stubs/host-stubs.cpp',
   'waterbox/stubs/vmem-stub.cpp',
   'waterbox/stubs/posix-stubs.cpp',
@@ -228,6 +233,12 @@ else
     cpp_args: ['-I' + mb / 'source/guest/include', '-I' + mb / 'extern/jsmn'],
     link_with: [deps_lib, refsw_lib],
     dependencies: [threads, dl, m])
+
+  # the zip reader on its own, against zips tests/zip/make-testzip.py writes;
+  # run-gate.sh runs it as its first leg
+  executable('test-zipfile', files('tests/zip/test-zipfile.cpp', 'waterbox/zipfile.cpp'),
+    include_directories: [include_directories('waterbox'), inc],
+    link_with: [deps_lib])
 
   mbhost = mb / 'build/meson-cpp/source/host'
   executable('run-wbx', files('waterbox/run-wbx.c'),

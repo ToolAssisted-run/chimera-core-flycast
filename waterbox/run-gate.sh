@@ -46,6 +46,23 @@ report() { printf "%-30s %-6s %s\n" "$1" "$2" "$3"; case "$2" in PASS) ok=$((ok+
 printf "%-30s %-6s %s\n" "Check" "Result" "Detail"
 printf "%-30s %-6s %s\n" "-----" "------" "------"
 
+# ---- the zip reader, before any machine ------------------------------------
+# A rom set is a zip, and the reader is this repository's own (waterbox/zipfile);
+# tests/zip/make-testzip.py writes the shapes that matter and test-zipfile
+# checks every byte comes back. Nothing here needs a machine, so it goes first.
+if [ -x "$nat/test-zipfile" ]; then
+	mkdir -p "$work/zip"
+	head -c 3000 /dev/urandom > "$work/zip/notazip.bin"
+	if python3 "$root/tests/zip/make-testzip.py" "$work/zip/t.zip" "$work/zip/t64.zip" \
+		&& out="$("$nat/test-zipfile" "$work/zip/t.zip" "$work/zip/t64.zip" "$work/zip/notazip.bin" 2>&1)"; then
+		report "zip:reader" PASS "$(grep -c '^PASS ' <<< "$out") checks: members by name and crc, stored and deflated, zip64"
+	else
+		report "zip:reader" FAIL "$(grep '^FAIL ' <<< "$out" | head -3 | tr '\n' ';')"
+	fi
+else
+	report "zip:reader" FAIL "no test-zipfile in $nat (rebuild the native reference)"
+fi
+
 # name program frames [noturbo]
 #
 # noturbo: the program draws ONE frame and then spins forever (see
