@@ -205,14 +205,26 @@ Chimera's firmware channel once the machine runs.
     NAOMI has no HLE bios and a synthetic cartridge is not a game to
     Flycast's table. What the gate cannot prove without content is
     recorded here instead, as the ares README does for its machines.
-  - **Not proven yet**: a NAOMI 2 game (the one decrypted VF4 Evolution .bin
-    to hand boots its bios to a single black quad for a minute - the dump
-    format, not the machine, is the suspect: upstream runs NAOMI 2 from MAME
-    sets, and this dump is a GD-ROM game flattened by a tool from before
-    NAOMI 2 was emulated), an Atomiswave game, a cartridge MAME set, a
-    GD-ROM set with its .chd, a clone with its parent, a vertical game's
-    rotation, a light gun. Each is a rom set away, and the gate legs take
-    whatever set the folder holds.
+  - **NAOMI 2, same day** (Virtua Fighter 4, `vf4cart.zip`, naomi2.zip):
+    sound and a black screen, and two things behind it. One: the netplay
+    "output" stub was a one-byte bool where upstream expects a 32-byte
+    object, and every NAOMI reset wrote that object over its neighbour in
+    BSS - `ggpo::inRollback` - so the Elan parsed every command as a
+    rollback replay and added no vertex (the decrypted VF4 Evolution .bin
+    was the same black quad for the same reason, not its format). Two:
+    skmp's rasteriser takes screen-space vertices and the Elan's arrive in
+    model space with the matrices beside them; `TransformNaomi2` in the
+    software renderer now does what the GPU vertex shader does - projection
+    times modelview, x/w, y/w, 1/w - and clips each triangle at the near
+    plane in clip space, because a rasteriser fed pixels cannot (the first
+    try without it drew a blue sheet across the arena). Per-vertex lighting
+    is not done yet; the game's base colours are what is drawn, and VF4
+    looks right without it. `vf4cart.zip` is a cartridge set, one zip, and
+    passes the same six legs as SFZ3 (`FLYCAST_NAOMI2_ROMS`).
+  - **Not proven yet**: an Atomiswave game (`FLYCAST_AW_ROMS`), a GD-ROM set
+    with its .chd, a clone with its parent, a vertical game's rotation, a
+    light gun, NAOMI 2 lighting against a GPU picture. Each is a rom set
+    away, and the gate legs take whatever set the folder holds.
 
 ## Sharp edges hit
 
@@ -235,6 +247,16 @@ Chimera's firmware channel once the machine runs.
   its Elan; and `naomi_cart_LoadBios` skips a dump entirely when it is called
   back after the game's boot header forced a region, so a Japan-only game kept
   the USA bios it was refused by. Both in patch 0016.
+- **A stub of the wrong TYPE corrupts its neighbours, and only on the machine
+  that uses it.** `bool networkOutput` stood in for a `NetworkOutput` object
+  for a month, and the Dreamcast never touched it. The NAOMI's reset calls
+  `networkOutput.reset()`, whose `term()` writes a 4-byte socket handle (-1)
+  and a 24-byte vector into a 1-byte variable; the linker had put
+  `ggpo::inRollback` in the next byte, so `rollbacking()` returned 255 and
+  the Elan ran its parse-only path. Found by printing `Active` inside
+  `executeCommand` after the histogram showed 37,000 plain-TA commands and
+  not one `ta_add_ta_data` call; `nm -n` on the binary put the two symbols
+  side by side. A stub must be the type upstream declares.
 - **The frontend's slot for a plain rom is the first REQUIRED one**, whatever
   the machine: a `.dat` opened without a project went into the Dreamcast's
   `disc` slot and the firmware conditions written over `romset` read false,
@@ -388,9 +410,11 @@ Chimera's firmware channel once the machine runs.
 
 ## What remains
 
-- **The arcade boards against more games** (M6): a NAOMI 2 set, an
-  Atomiswave set, a GD-ROM set with its disc, a clone beside its parent, a
-  vertical game, a gun game. The System SP (card readers) is out by
+- **The arcade boards against more games** (M6): an Atomiswave set, a
+  GD-ROM set with its disc, a clone beside its parent, a vertical game, a
+  gun game; NAOMI 2 per-vertex lighting in the software renderer (the
+  shader's computeColors, not yet done on the CPU) held against a GPU
+  picture. The System SP (card readers) is out by
   decision. The JVS panel is declared whole; a per-game panel (Flycast
   knows each game's button names) would be a nicer movie header but a
   different wire per game, which is not what a declaration is.

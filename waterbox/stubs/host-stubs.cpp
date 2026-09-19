@@ -20,6 +20,7 @@
 #include "hw/maple/maple_devs.h"
 #include "network/ggpo.h"
 #include "network/net_handshake.h"
+#include "network/output.h"
 #include "hw/naomi/naomi_m3comm.h"
 #include "hw/naomi/netdimm.h"
 #include "oslib/oslib.h"
@@ -88,7 +89,16 @@ bool naomiNetworkSupported() { return false; }
 u16 defaultNaomiServerPort() { return 0; }
 void NetworkHandshake::init() {}
 void NetworkHandshake::term() {}
-bool networkOutput = false;
+/* The lamp/output socket of MAME's "output" protocol. The OBJECT, not a
+ * stand-in: upstream declares `extern NetworkOutput networkOutput` and calls
+ * methods on it, and this was a one-byte bool for its whole life - so every
+ * NAOMI reset (naomi.cpp calls networkOutput.reset()) wrote the object's 32
+ * bytes of socket and vector over whatever the linker put next, which was
+ * ggpo::inRollback: the Elan then took every command as a rollback replay,
+ * parsed geometry without adding a vertex, and every NAOMI 2 game was a
+ * black screen with sound. The class is header-only and, with the option
+ * off (its default; nothing here turns it on), it opens no socket. */
+NetworkOutput networkOutput;
 
 u32 NaomiM3Comm::ReadMem(u32, u32) { return 0; }
 void NaomiM3Comm::WriteMem(u32, u32, u32) {}

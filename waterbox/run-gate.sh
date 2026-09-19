@@ -652,59 +652,85 @@ fi
 # in Flycast's own table, so no synthetic one is a game. What CAN be held to
 # account, given the content, is the same as for every program above - native
 # == sandbox, the machine ran, a savestate round-trip is lossless, the panel
-# reaches it - and that is what runs here when FLYCAST_ARCADE_ROMS names a
-# folder holding naomi.zip and one game (a MAME zip, or a decrypted .dat/.bin).
-# Without it the legs are SKIPPED, which is what CI does; docs/PLAN.md records
-# what they said on the machine that had the roms.
-if [ -n "${FLYCAST_ARCADE_ROMS:-}" ] && [ -f "$FLYCAST_ARCADE_ROMS/naomi.zip" ]; then
-	game="$(cd "$FLYCAST_ARCADE_ROMS" && ls *.zip *.dat *.bin 2>/dev/null | grep -v '^naomi\.zip$' | head -1)"
-	wd="$work/arcade"
+# reaches it - and that is what runs here, once per board, when the folder
+# for it is named: FLYCAST_ARCADE_ROMS (naomi.zip + a game: a MAME zip or a
+# decrypted .dat/.bin), FLYCAST_NAOMI2_ROMS (naomi2.zip + a game),
+# FLYCAST_AW_ROMS (awbios.zip + a game). Without them the legs are SKIPPED,
+# which is what CI does; docs/PLAN.md records what they said on the machine
+# that had the roms.
+arcade_legs() {
+	local tag="$1" machine="$2" bios="$3" dir="$4"
+	if [ -z "$dir" ] || [ ! -f "$dir/$bios" ]; then
+		report "$tag:equivalence" SKIP "set the roms folder (see the comment above)"
+		return
+	fi
+	local game
+	game="$(cd "$dir" && ls *.zip *.dat *.bin 2>/dev/null | grep -v "^$bios\$" | head -1)"
+	local wd="$work/$tag"
 	mkdir -p "$wd"
-	cp "$FLYCAST_ARCADE_ROMS/naomi.zip" "$FLYCAST_ARCADE_ROMS/$game" "$wd/"
+	cp "$dir/$bios" "$dir/$game" "$wd/"
 	printf '{"romset":["%s"]}' "$game" > "$wd/slots"
-	printf '{"machine":"naomi"}' > "$wd/settings"
-	frames=${FLYCAST_ARCADE_FRAMES:-600}
+	printf '{"machine":"%s"}' "$machine" > "$wd/settings"
+	local frames=${FLYCAST_ARCADE_FRAMES:-600}
 	if ! "$nat/run-native" "$wd" --frames "$frames" 2>"$work/nat.err" | digests > "$work/nat.txt"; then
-		report "arcade:equivalence" FAIL "native runner error: $(grep -v '^\s*$' "$work/nat.err" | tail -1)"
+		report "$tag:equivalence" FAIL "native runner error: $(grep -v '^\s*$' "$work/nat.err" | tail -1)"
 	elif ! "$nat/run-wbx" "$gst/core.wbx" "$wd" --frames "$frames" 2>"$work/box.err" | digests > "$work/box.txt"; then
-		report "arcade:equivalence" FAIL "waterbox runner error: $(grep -v '^\s*$' "$work/box.err" | tail -1)"
+		report "$tag:equivalence" FAIL "waterbox runner error: $(grep -v '^\s*$' "$work/box.err" | tail -1)"
 	elif cmp -s "$work/nat.txt" "$work/box.txt"; then
-		report "arcade:equivalence" PASS "$game, $frames frames, native == waterboxed"
+		report "$tag:equivalence" PASS "$game, $frames frames, native == waterboxed"
 		"$nat/run-native" "$wd" --frames $((frames / 2)) 2>/dev/null | digests > "$work/half.txt"
 		if cmp -s "$work/nat.txt" "$work/half.txt"; then
-			report "arcade:ran" FAIL "half as many frames left the machine in the same state"
+			report "$tag:ran" FAIL "half as many frames left the machine in the same state"
 		else
-			report "arcade:ran" PASS "the board executed: $frames frames differ from $((frames / 2))"
+			report "$tag:ran" PASS "the board executed: $frames frames differ from $((frames / 2))"
 		fi
 		if "$nat/run-wbx" "$gst/core.wbx" "$wd" --frames "$frames" --rerecord 2>/dev/null | digests > "$work/rr.txt" \
 			&& cmp -s "$work/box.txt" "$work/rr.txt"; then
-			report "arcade:savestate" PASS "per-frame round-trip is lossless"
+			report "$tag:savestate" PASS "per-frame round-trip is lossless"
 		else
-			report "arcade:savestate" FAIL "$(diff "$work/box.txt" "$work/rr.txt" | tr '\n' ' ' | head -c 120)"
+			report "$tag:savestate" FAIL "$(diff "$work/box.txt" "$work/rr.txt" | tr '\n' ' ' | head -c 120)"
 		fi
 		# the panel: Test (P1 wire 15) held for five frames three quarters of the
 		# way in (the bios polls nothing for its first 300) opens the system menu
-		# on any NAOMI, so the machine must differ
+		# on any of these boards, so the machine must differ
+		local held boxheld
 		held="$("$nat/run-native" "$wd" --frames "$frames" --press $((frames * 3 / 4)):5:15 2>/dev/null | digests)"
 		boxheld="$("$nat/run-wbx" "$gst/core.wbx" "$wd" --frames "$frames" --press $((frames * 3 / 4)):5:15 2>/dev/null | digests)"
 		if [ "$held" = "$(cat "$work/nat.txt")" ]; then
-			report "arcade:panel" FAIL "the Test button made no difference to the machine"
+			report "$tag:panel" FAIL "the Test button made no difference to the machine"
 		elif [ "$held" != "$boxheld" ]; then
-			report "arcade:panel" FAIL "native and sandbox disagree with Test held"
+			report "$tag:panel" FAIL "native and sandbox disagree with Test held"
 		else
-			report "arcade:panel" PASS "the JVS board read the panel: idle != Test held, native == waterboxed"
+			report "$tag:panel" PASS "the JVS board read the panel: idle != Test held, native == waterboxed"
 		fi
-		if [ -f "$wd/$game.eeprom" ] || ls "$wd"/*.nvmem >/dev/null 2>&1; then
-			report "arcade:nvram" FAIL "the run left an EEPROM or NVRAM file behind: a later run would read it"
+		if ls "$wd"/*.eeprom "$wd"/*.nvmem >/dev/null 2>&1; then
+			report "$tag:nvram" FAIL "the run left an EEPROM or NVRAM file behind: a later run would read it"
 		else
-			report "arcade:nvram" PASS "no EEPROM or NVRAM file written: the board's memory is the savestate's"
+			report "$tag:nvram" PASS "no EEPROM or NVRAM file written: the board's memory is the savestate's"
+		fi
+		# the picture: something must have been drawn by the end (the NAOMI 2
+		# drew nothing for its whole first day - the Elan's geometry needs the
+		# transform the GPU shaders do, done on the CPU for the rasteriser)
+		"$nat/run-native" "$wd" --frames "$frames" --screenshot "$work/$tag.tga" >/dev/null 2>&1
+		local lit
+		lit="$(python3 - "$work/$tag.tga" <<'PYLIT'
+import struct, sys
+d = open(sys.argv[1], "rb").read(); w, h = struct.unpack("<HH", d[12:16]); px = d[18:18 + w * h * 4]
+print(sum(1 for i in range(0, len(px), 4) if px[i] | px[i + 1] | px[i + 2]) * 100 // (w * h))
+PYLIT
+)"
+		if [ "${lit:-0}" -gt 0 ]; then
+			report "$tag:picture" PASS "frame $frames is $lit% lit"
+		else
+			report "$tag:picture" FAIL "frame $frames is black"
 		fi
 	else
-		report "arcade:equivalence" FAIL "$(diff "$work/nat.txt" "$work/box.txt" | tr '\n' ' ' | head -c 120)"
+		report "$tag:equivalence" FAIL "$(diff "$work/nat.txt" "$work/box.txt" | tr '\n' ' ' | head -c 120)"
 	fi
-else
-	report "arcade:equivalence" SKIP "set FLYCAST_ARCADE_ROMS to a folder with naomi.zip and a game"
-fi
+}
+arcade_legs "naomi" "naomi" "naomi.zip" "${FLYCAST_ARCADE_ROMS:-}"
+arcade_legs "naomi2" "naomi2" "naomi2.zip" "${FLYCAST_NAOMI2_ROMS:-}"
+arcade_legs "atomiswave" "atomiswave" "awbios.zip" "${FLYCAST_AW_ROMS:-}"
 
 # ---- what a project PLUGS IN decides what a movie has columns for ----------
 # This package declares the union of every device its four ports can hold -

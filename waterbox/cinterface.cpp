@@ -746,7 +746,12 @@ ECL_EXPORT int Init(void)
 	 * console listener is the only one; patch 0001 removed the network one. */
 	if (LogManager::GetInstance() == nullptr)
 	{
-		config::setTransient("log", "Verbosity", std::to_string((int)LogTypes::LWARNING));
+		/* CHIMERA_FLYCAST_LOG=<1..5> raises it (5 = debug) in the native
+		 * reference, where there is an environment to ask */
+		int verbosity = (int)LogTypes::LWARNING;
+		if (const char *env = getenv("CHIMERA_FLYCAST_LOG"))
+			verbosity = atoi(env);
+		config::setTransient("log", "Verbosity", std::to_string(verbosity));
 		config::setTransient("log", "LogToConsole", "yes");
 		LogManager::Init();
 	}
