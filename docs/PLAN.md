@@ -2,8 +2,8 @@
 
 ## What this is
 
-A Dreamcast (and later NAOMI/Atomiswave) core for Chimera, built from upstream
-`flyinghead/flycast` in miniBox's sandbox.
+A Dreamcast, NAOMI, NAOMI 2 and Atomiswave core for Chimera, built from
+upstream `flyinghead/flycast` in miniBox's sandbox.
 
 It is the first core here with **no precedent to copy**. Every core so far was
 either a port of something BizHawk already ran, or something the author had
@@ -163,29 +163,83 @@ Chimera's firmware channel once the machine runs.
     every declared entry that applies is required, and variants are separate
     entries selected by a setting. "hle" and "real" are different machines and
     do not share movies.
-- **M6 - beyond Dreamcast: NOT SHIPPED, and here is why.** NAOMI and Atomiswave
-  were to become additional machines in this package, the way gpgx serves four
-  systems. The code is already here - `hw/naomi` is in the curated source set,
-  and the frontend's machines feature is proven by gpgx - but the milestone
-  cannot be PROVEN here, and this repository does not ship claims it cannot
-  gate.
-  What stands in the way is content, not code:
-  - a NAOMI cartridge is identified by its FILENAME matching an entry in
-    Flycast's own romset table (`FindGame` over `naomi_roms.cpp`), and each
-    entry names the exact roms and their CRCs. A synthetic cart - the trick
-    that gave this core its Dreamcast disc - cannot be made to boot, because
-    an unknown name is not a game.
-  - every NAOMI machine also needs its bios (`naomi.zip`), which is
-    copyrighted, as is every romset.
-  - romsets are zip archives, and this core answers `OpenArchive` with "not an
-    archive" (waterbox/stubs/archive-stub.cpp): supporting them means bringing
-    libzip and the 7z sdk back into a build that dropped a hundred translation
-    units to be rid of them.
-  So the honest order is: someone with a legally dumped romset and bios adds
-  the machines, and the gate they add proves it. Until then the package
-  declares one machine, and that machine works.
+- **M6 DONE** (2026-09-19): NAOMI, NAOMI 2 and Atomiswave, as three more
+  machines in the package (issue chimera#70). What stood in the way was
+  content and a container, and both were answered:
+  - **Rom sets are zips**, and the zip reader is this repository's own
+    (`waterbox/zipfile.cpp`, 300 lines over the zlib already compiled in for
+    CHDs): the central directory, a member by name or by CRC, stored and
+    deflated, zip64. It replaces the stub that answered "not an archive" and
+    brings back none of libzip or the 7z sdk. `tests/zip/` proves it on zips
+    the test writes itself, including a hand-written zip64 directory, and
+    that is the gate's first leg. A 7z is refused by name (rezip it).
+  - **The machine is the project's.** A `machine` setting selects Dreamcast,
+    NAOMI, NAOMI 2 or Atomiswave (`machineSetting`, the way gpgx and ares do
+    it); each arcade machine has the JVS panel as its controller, a `romset`
+    slot (the MAME zip, a clone's parent beside it, the .chd of a GD-ROM game,
+    or a decrypted .dat/.bin/.lst of the nullDC era) and its bios set on the
+    firmware page (`naomi.zip`, `naomi2.zip`, `awbios.zip`; the four cabinets
+    with a bios of their own - HOD2, the two F355s, Airline Pilots - through
+    the `naomiBios` setting). A set for another board is refused with a
+    message naming both boards. A decrypted dump says which board it is for
+    in its own boot header, and patch 0016 reads that where upstream assumed
+    NAOMI.
+  - **The board's memory is the host's.** Upstream reads the JVS EEPROM and
+    the bios NVRAM from files beside the rom at power-on and writes them on
+    every change; the native reference read its own previous run's `.eeprom`
+    and disagreed with the sandbox. Now nothing is written, the savestate
+    carries them, and they leave through the save-data channel as
+    `<set>.eeprom` / `<set>.nvmem` - the names upstream reads - so a project
+    that mounts them back (the `boardmemory` slot) seeds a board somebody set
+    up in the test menu.
+  - **Off the record, on this machine**: Street Fighter Zero 3 Upper (a
+    decrypted .dat, NAOMI, naomi.zip) boots through the NAOMI bios, forces
+    its own region (Japan; the USA bios refused it with "THIS GAME IS NOT
+    ACCEPTABLE BY MAIN BOARD" until patch 0016 reloaded the bios for a
+    dump too), reaches its attract mode at frame ~3600, and the Test button
+    opens the system menu. Native == sandbox over 1800 frames, a savestate
+    round-trip every frame is lossless, and the frontend's session has the
+    same RAM as the native reference. `run-gate.sh` and `run-frontend.sh`
+    run these legs when `FLYCAST_ARCADE_ROMS` names a folder with naomi.zip
+    and a game, and SKIP them otherwise - which is what CI does, because a
+    NAOMI has no HLE bios and a synthetic cartridge is not a game to
+    Flycast's table. What the gate cannot prove without content is
+    recorded here instead, as the ares README does for its machines.
+  - **Not proven yet**: a NAOMI 2 game (the one decrypted VF4 Evolution .bin
+    to hand boots its bios to a single black quad for a minute - the dump
+    format, not the machine, is the suspect: upstream runs NAOMI 2 from MAME
+    sets, and this dump is a GD-ROM game flattened by a tool from before
+    NAOMI 2 was emulated), an Atomiswave game, a cartridge MAME set, a
+    GD-ROM set with its .chd, a clone with its parent, a vertical game's
+    rotation, a light gun. Each is a rom set away, and the gate legs take
+    whatever set the folder holds.
 
 ## Sharp edges hit
+
+- **A sandbox has `naomi.zip` and not `./naomi.zip`.** Flycast joins its data
+  directory onto a file name with a separator between, and the data
+  directory was `"./"`, so every bios lookup asked for `./naomi.zip` - which a
+  real file system shrugs off and miniBox's memfs, serving exactly the names
+  it was given, does not. The core gate never saw it because run-native and
+  run-wbx work in a real directory. The frontend gate did. Patch 0016 lets an
+  empty data directory stay empty (patch 0004's rule for `getParentPath`),
+  and the core now says `""`.
+- **The native reference read its own leftovers.** Two native runs of the same
+  arcade game disagreed with each other and with the sandbox - the first had
+  written `<set>.eeprom` beside the rom on every EEPROM write, and the second
+  read it at power-on. The sandbox could not write and stayed honest. The
+  board's memory is the host's now (M6), and `arcade:nvram` fails the gate if
+  a run leaves such a file behind.
+- **A decrypted dump is a NAOMI to upstream whatever it says.** `getGamePlatform`
+  returns NAOMI for every `.bin`/`.dat`, so a NAOMI 2 dump would boot without
+  its Elan; and `naomi_cart_LoadBios` skips a dump entirely when it is called
+  back after the game's boot header forced a region, so a Japan-only game kept
+  the USA bios it was refused by. Both in patch 0016.
+- **The frontend's slot for a plain rom is the first REQUIRED one**, whatever
+  the machine: a `.dat` opened without a project went into the Dreamcast's
+  `disc` slot and the firmware conditions written over `romset` read false,
+  so naomi.zip was never asked for. `WaterboxCoreFactory.SlotsFromRom` now
+  picks among the slots the machine exposes (chimera side).
 
 - **Two windows onto video memory, and only one of them is the PVR's.** The
   32-bit window (0xA5xxxxxx from the SH4) is what everything the PVR reads for
@@ -334,7 +388,12 @@ Chimera's firmware channel once the machine runs.
 
 ## What remains
 
-- **NAOMI and Atomiswave**, as above: content-gated, not code-gated.
+- **The arcade boards against more games** (M6): a NAOMI 2 set, an
+  Atomiswave set, a GD-ROM set with its disc, a clone beside its parent, a
+  vertical game, a gun game. The System SP (card readers) is out by
+  decision. The JVS panel is declared whole; a per-game panel (Flycast
+  knows each game's button names) would be a nicer movie header but a
+  different wire per game, which is not what a declaration is.
 - **Textures.** refsw decodes them (TexUtils.cpp is vendored and compiled), and
   nothing in the gate draws a textured polygon yet - the test program submits
   flat-shaded geometry. A real game is the test that matters here.
@@ -372,6 +431,16 @@ Chimera's firmware channel once the machine runs.
   a game worth recording.
 
 ## Log
+
+- **2026-09-19** M6: the arcade boards. See the milestone for what shipped;
+  the numbers: SFZ3 Upper 3600 frames in 148 s natively (interpreter, software
+  renderer - 24 fps, a third of real time; `cpu=jit` is the setting for
+  speed), 1800 frames native == sandbox, 44 gate legs green with the arcade
+  ones on, 5 frontend legs. The bios sets in hand: naomi.zip, naomi2.zip,
+  awbios.zip. Games in hand that are NOT in a form Flycast takes: a TOSEC
+  GD-ROM cue/bin without its security-PIC zip (Shikigami no Shiro II), and a
+  Dreamcast conversion of an Atomiswave game (Ranger Mission .chd) - the
+  first needs `shikgam2.zip`, the second is a Dreamcast disc.
 
 - **2026-09-11** The software renderer is the default. Asked for: the hardware
   path has been unstable in use, and a Dreamcast does not need it. skmp's

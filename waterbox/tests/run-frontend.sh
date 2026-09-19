@@ -83,10 +83,11 @@ printf "%-28s %-9s %s\n" "Check" "Result" "Detail"
 printf "%-28s %-9s %s\n" "-----" "------" "------"
 
 run_frontend() {
-	local tag="$1" cfg="$2" nframes="$3" shot="${4:-}" pkg="${5:-$package}" therom="${6:-$rom}"
+	local tag="$1" cfg="$2" nframes="$3" shot="${4:-}" pkg="${5:-$package}" therom="${6:-$rom}" extra="${7:-}" system="${8:-DC}"
 	local job="$work/job.$tag.txt"
 	{
 		echo "frames=$nframes"
+		echo "system=$system"
 		echo "out=$work/$tag.ram.bin"
 		echo "meta=$work/$tag.meta.txt"
 		echo "shot=$shot"
@@ -94,7 +95,7 @@ run_frontend() {
 	rm -f "$work/$tag.ram.bin" "$work/$tag.meta.txt"
 	[ -n "$shot" ] && rm -f "$shot"
 	( cd "$chimera_root" && MINIHAWK_JOB="$job" timeout 900 mono "$emu_exe" --headless \
-		"--config=$cfg" "--core=$pkg" \
+		"--config=$cfg" "--core=$pkg" $extra \
 		"--lua=$here/frontend-ram.lua" "$therom" ) > "$work/$tag.log" 2>&1
 	[ -f "$work/$tag.meta.txt" ] && grep -q "^status=OK" "$work/$tag.meta.txt"
 }
@@ -149,6 +150,39 @@ else
 		report "settings:region" PASS "region=japan matches its native reference and changes the machine's flash"
 	else
 		report "settings:region" FAIL "region=japan left the flash unchanged ($base_flash)"
+	fi
+fi
+
+# --- an arcade board through the frontend, OFF THE RECORD (see run-gate.sh) ---
+# The same machine the core gate ran, opened by the frontend as a directly
+# given rom with the machine setting pinned and the bios set handed over on
+# the firmware channel: its RAM must be the native reference's. Skipped
+# without FLYCAST_ARCADE_ROMS, which is what CI does.
+if [ -n "${FLYCAST_ARCADE_ROMS:-}" ] && [ -f "$FLYCAST_ARCADE_ROMS/naomi.zip" ]; then
+	game="$(cd "$FLYCAST_ARCADE_ROMS" && ls *.zip *.dat *.bin 2>/dev/null | grep -v '^naomi\.zip$' | head -1)"
+	aframes=${FLYCAST_ARCADE_FRAMES:-600}
+	wd="$work/native.arcade"
+	rm -rf "$wd"; mkdir -p "$wd"
+	cp "$FLYCAST_ARCADE_ROMS/naomi.zip" "$FLYCAST_ARCADE_ROMS/$game" "$wd/"
+	printf '{"romset":["%s"]}' "$game" > "$wd/slots"
+	printf '{"machine":"naomi"}' > "$wd/settings"
+	settings_config "$work/config.arcade.ini" '{"machine": "naomi"}'
+	if ! "$rn" "$wd" --frames "$aframes" --dump-domain "System RAM" "$work/native.arcade.ram.bin" > "$work/native.arcade.txt" 2>&1; then
+		report "arcade:frontend" FAIL "native runner error (see tests/work/native.arcade.txt)"
+	elif ! frames="$aframes" run_frontend "arcade" "$work/config.arcade.ini" "$aframes" "$work/arcade.png" "$package" \
+			"$FLYCAST_ARCADE_ROMS/$game" "--firmware=naomi.zip=$FLYCAST_ARCADE_ROMS/naomi.zip" NAOMI; then
+		report "arcade:frontend" FAIL "no OK meta (see tests/work/arcade.log)"
+	elif cmp -s "$work/native.arcade.ram.bin" "$work/arcade.ram.bin"; then
+		report "arcade:frontend" PASS "$game, $aframes frames, System RAM identical to the native reference"
+	else
+		report "arcade:frontend" FAIL "System RAM differs from the native reference"
+	fi
+	# the panel's shipped bindings, adopted the way the Dreamcast's are below
+	if python3 "$here/check-keybinds.py" "$work/config.arcade.ini" \
+		"$wb/default_keybinds.json" "Arcade Panel" > "$work/arcadekeys.txt" 2>&1; then
+		report "arcade:keybinds" PASS "$(cat "$work/arcadekeys.txt")"
+	else
+		report "arcade:keybinds" FAIL "$(head -1 "$work/arcadekeys.txt")"
 	fi
 fi
 

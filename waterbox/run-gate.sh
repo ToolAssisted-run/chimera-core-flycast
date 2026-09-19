@@ -646,6 +646,66 @@ if [ -d "$wd" ]; then
 	fi
 fi
 
+# ---- the arcade boards, against a real game OFF THE RECORD ------------------
+# A NAOMI cannot be gated the way the Dreamcast above is: it has no HLE bios,
+# so nothing boots without Sega's, and a cartridge is recognised by its name
+# in Flycast's own table, so no synthetic one is a game. What CAN be held to
+# account, given the content, is the same as for every program above - native
+# == sandbox, the machine ran, a savestate round-trip is lossless, the panel
+# reaches it - and that is what runs here when FLYCAST_ARCADE_ROMS names a
+# folder holding naomi.zip and one game (a MAME zip, or a decrypted .dat/.bin).
+# Without it the legs are SKIPPED, which is what CI does; docs/PLAN.md records
+# what they said on the machine that had the roms.
+if [ -n "${FLYCAST_ARCADE_ROMS:-}" ] && [ -f "$FLYCAST_ARCADE_ROMS/naomi.zip" ]; then
+	game="$(cd "$FLYCAST_ARCADE_ROMS" && ls *.zip *.dat *.bin 2>/dev/null | grep -v '^naomi\.zip$' | head -1)"
+	wd="$work/arcade"
+	mkdir -p "$wd"
+	cp "$FLYCAST_ARCADE_ROMS/naomi.zip" "$FLYCAST_ARCADE_ROMS/$game" "$wd/"
+	printf '{"romset":["%s"]}' "$game" > "$wd/slots"
+	printf '{"machine":"naomi"}' > "$wd/settings"
+	frames=${FLYCAST_ARCADE_FRAMES:-600}
+	if ! "$nat/run-native" "$wd" --frames "$frames" 2>"$work/nat.err" | digests > "$work/nat.txt"; then
+		report "arcade:equivalence" FAIL "native runner error: $(grep -v '^\s*$' "$work/nat.err" | tail -1)"
+	elif ! "$nat/run-wbx" "$gst/core.wbx" "$wd" --frames "$frames" 2>"$work/box.err" | digests > "$work/box.txt"; then
+		report "arcade:equivalence" FAIL "waterbox runner error: $(grep -v '^\s*$' "$work/box.err" | tail -1)"
+	elif cmp -s "$work/nat.txt" "$work/box.txt"; then
+		report "arcade:equivalence" PASS "$game, $frames frames, native == waterboxed"
+		"$nat/run-native" "$wd" --frames $((frames / 2)) 2>/dev/null | digests > "$work/half.txt"
+		if cmp -s "$work/nat.txt" "$work/half.txt"; then
+			report "arcade:ran" FAIL "half as many frames left the machine in the same state"
+		else
+			report "arcade:ran" PASS "the board executed: $frames frames differ from $((frames / 2))"
+		fi
+		if "$nat/run-wbx" "$gst/core.wbx" "$wd" --frames "$frames" --rerecord 2>/dev/null | digests > "$work/rr.txt" \
+			&& cmp -s "$work/box.txt" "$work/rr.txt"; then
+			report "arcade:savestate" PASS "per-frame round-trip is lossless"
+		else
+			report "arcade:savestate" FAIL "$(diff "$work/box.txt" "$work/rr.txt" | tr '\n' ' ' | head -c 120)"
+		fi
+		# the panel: Test (P1 wire 15) held for five frames three quarters of the
+		# way in (the bios polls nothing for its first 300) opens the system menu
+		# on any NAOMI, so the machine must differ
+		held="$("$nat/run-native" "$wd" --frames "$frames" --press $((frames * 3 / 4)):5:15 2>/dev/null | digests)"
+		boxheld="$("$nat/run-wbx" "$gst/core.wbx" "$wd" --frames "$frames" --press $((frames * 3 / 4)):5:15 2>/dev/null | digests)"
+		if [ "$held" = "$(cat "$work/nat.txt")" ]; then
+			report "arcade:panel" FAIL "the Test button made no difference to the machine"
+		elif [ "$held" != "$boxheld" ]; then
+			report "arcade:panel" FAIL "native and sandbox disagree with Test held"
+		else
+			report "arcade:panel" PASS "the JVS board read the panel: idle != Test held, native == waterboxed"
+		fi
+		if [ -f "$wd/$game.eeprom" ] || ls "$wd"/*.nvmem >/dev/null 2>&1; then
+			report "arcade:nvram" FAIL "the run left an EEPROM or NVRAM file behind: a later run would read it"
+		else
+			report "arcade:nvram" PASS "no EEPROM or NVRAM file written: the board's memory is the savestate's"
+		fi
+	else
+		report "arcade:equivalence" FAIL "$(diff "$work/nat.txt" "$work/box.txt" | tr '\n' ' ' | head -c 120)"
+	fi
+else
+	report "arcade:equivalence" SKIP "set FLYCAST_ARCADE_ROMS to a folder with naomi.zip and a game"
+fi
+
 # ---- what a project PLUGS IN decides what a movie has columns for ----------
 # This package declares the union of every device its four ports can hold -
 # twenty controls and eleven axes per port - because a declaration is static and

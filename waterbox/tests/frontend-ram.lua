@@ -49,8 +49,10 @@ for line in io.lines(jobPath) do
 end
 meta.metaPath = job.meta
 
+-- the machine the job expects: a Dreamcast unless it says otherwise (the
+-- package is four machines; the arcade leg asks for its own)
 local sysid = emu.getsystemid()
-if sysid ~= "DC" then
+if sysid ~= (job.system or "DC") then
 	finish("ERROR", "wrong system id: " .. tostring(sysid))
 end
 if emu.getcorename() ~= "Flycast" then

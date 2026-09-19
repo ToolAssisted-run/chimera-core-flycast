@@ -1,5 +1,5 @@
 {
-  "_comment": "The core-declared file form for chimera's project wizard: a Dreamcast project is one disc. A .gdi names its tracks in a sibling file, so the wizard takes the index and the frontend mounts what it references.",
+  "_comment": "The core-declared file form for chimera's project wizard. One core.wbx is four machines and each takes its own kind of file, so the machine setting decides which slots are exposed: a Dreamcast project is one disc (a .gdi names its tracks in a sibling file, so the wizard takes the index and the frontend mounts what it references); an arcade project is a MAME rom set.",
   "slots": [
     {
       "id": "disc",
@@ -13,7 +13,33 @@
         "cue",
         "elf"
       ],
-      "help": "The GD-ROM image. A .gdi index (with its track files beside it), a .cdi, a .chd, or a .cue - and a naked .elf, which the HLE bios boots straight from memory the way homebrew is usually tested."
+      "help": "The GD-ROM image. A .gdi index (with its track files beside it), a .cdi, a .chd, or a .cue - and a naked .elf, which the HLE bios boots straight from memory the way homebrew is usually tested.",
+      "exposedWhen": {
+        "setting": "machine",
+        "is": "dreamcast"
+      }
+    },
+    {
+      "id": "romset",
+      "title": "Rom set",
+      "min": 1,
+      "max": 3,
+      "formats": [
+        "zip",
+        "chd",
+        "dat",
+        "bin",
+        "lst"
+      ],
+      "help": "The game's MAME rom set: the zip, named exactly as MAME names it (vf4.zip, ikaruga.zip), because the name is how Flycast recognises the set - a renamed zip is an unknown game. A CLONE set (a revision, a region) leans on its parent for the roms it shares, so put the parent zip here beside it; the core works out which is which. A NAOMI GD-ROM game is its zip (the security PIC) plus the disc as a .chd, named as MAME names it (gdl-0010.chd), also here. The bios set comes from the firmware page, not from here. Decrypted dumps in the old nullDC form (.dat, .bin, .lst) also load, and say in their own header which board they are for.",
+      "exposedWhen": {
+        "setting": "machine",
+        "in": [
+          "naomi",
+          "naomi2",
+          "atomiswave"
+        ]
+      }
     },
     {
       "id": "savedata",
@@ -23,7 +49,31 @@
       "formats": [
         "bin"
       ],
-      "help": "What the machine's memory cards start with already on them. These are the files Emulator > Export Save Data... writes, put back under the same names - vmu_A1.bin through vmu_D1.bin, one card in the first slot of each connected controller. Each is mounted read-only and pinned by hash, and the movie cites it, so a movie that starts from a saved game is as reproducible as one that starts from a blank card. Leave it empty and the machine formats fresh cards."
+      "help": "What the machine's memory cards start with already on them. These are the files Emulator > Export Save Data... writes, put back under the same names - vmu_A1.bin through vmu_D1.bin, one card in the first slot of each connected controller. Each is mounted read-only and pinned by hash, and the movie cites it, so a movie that starts from a saved game is as reproducible as one that starts from a blank card. Leave it empty and the machine formats fresh cards.",
+      "exposedWhen": {
+        "setting": "machine",
+        "is": "dreamcast"
+      }
+    },
+    {
+      "id": "boardmemory",
+      "title": "Board memory",
+      "min": 0,
+      "max": 4,
+      "formats": [
+        "eeprom",
+        "nvmem",
+        "bin"
+      ],
+      "help": "What the arcade board's memory starts with: the JVS board's EEPROM (<rom set>.eeprom - coin settings, the game's own options), the bios's battery-backed RAM (<rom set>.nvmem - bookkeeping, backup data), and the two memory cards a NAOMI panel can carry (vmu_B1.bin, vmu_C1.bin - a few games save to them). These are the files Emulator > Export Save Data... writes; put back under the same names they seed the board, so a movie that starts from a cabinet somebody set up in the test menu is as reproducible as one that starts from a fresh board. Leave it empty and the board starts as Flycast starts it: the game's default EEPROM, fresh cards, and free play or coins as the coin setting says.",
+      "exposedWhen": {
+        "setting": "machine",
+        "in": [
+          "naomi",
+          "naomi2",
+          "atomiswave"
+        ]
+      }
     }
   ]
 }

@@ -1,6 +1,7 @@
 # chimera-core-flycast
 
-Flycast - Dreamcast, and later NAOMI/Atomiswave - as a Chimera waterbox core.
+Flycast - the Dreamcast, and the arcade boards built from it: NAOMI, NAOMI 2
+and Atomiswave - as a Chimera waterbox core.
 
 Upstream is `flyinghead/flycast`, pinned as a submodule at `extern/flycast`.
 
@@ -30,3 +31,24 @@ Gates:
 Both run on programs this repository assembles (`tests/sh4asm.py`) and a GD-ROM
 it builds (`tests/make-testdisc.py`), because a Dreamcast game is somebody's
 copyrighted disc.
+
+The arcade machines cannot be gated that way: a NAOMI has no HLE bios, and a
+rom set is recognised by its name in Flycast's own table. Their legs run when
+`FLYCAST_ARCADE_ROMS` names a folder holding `naomi.zip` and one game (a MAME
+zip, or a decrypted `.dat`/`.bin`), and are skipped otherwise; what they said
+on the machine that had the roms is in `docs/PLAN.md`.
+
+## The arcade boards
+
+One package, four machines: the `machine` setting picks Dreamcast, NAOMI,
+NAOMI 2 or Atomiswave, and a project pins it. An arcade project is a MAME rom
+set - the zip named as MAME names it (`vf4.zip`), a clone's parent zip beside
+it, the `.chd` of a GD-ROM game beside its zip - or a decrypted dump of the
+nullDC era (`.dat`, `.bin`, `.lst`). The bios set comes from the firmware page:
+`naomi.zip`, `naomi2.zip` or `awbios.zip`, taken whole. The controller is the
+JVS panel (Start, Button 1-8, Coin, Service, Test per player, plus the analog
+channels, gun and rotary axes), with MAME's keyboard habits as the defaults.
+The board's EEPROM and NVRAM leave through Export Save Data and go back through
+the project's Board memory slot. Vertical games come out turned the way their
+cabinet's monitor was mounted (the `rotation` setting). A set for another board
+is refused with a message that names both.

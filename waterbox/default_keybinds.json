@@ -10,7 +10,12 @@
     "no keys, because four people at one keyboard is not a thing and any key chosen for them",
     "would collide with player 1's. C, D, Z, the second d-pad, the second stick, the mouse and",
     "the light gun are declared but unbound: they belong to devices a port has to be SET to,",
-    "and a binding for a device nobody plugged in is a key that does nothing."
+    "and a binding for a device nobody plugged in is a key that does nothing.",
+    "The Arcade Panel (the three arcade machines) follows MAME's keyboard habits, which is what",
+    "anybody who has played these boards on a PC has in their hands: 1 and 2 start, 5 and 6 coin,",
+    "F2 test, 9 service, and player 1's buttons on Z X C A S D (a fighter's punches above kicks)",
+    "with 7 and 8 on V and F. Player 2 has the second pad; its coin and start stay on the keyboard",
+    "as MAME keeps them."
   ],
   "AllTrollers": {
     "Dreamcast Controller": {
@@ -50,10 +55,81 @@
       "P4 X": "J4 B1, X4 X",
       "P4 Y": "J4 B4, X4 Y",
       "P4 Start": "J4 B10, X4 Start"
+    },
+    "Arcade Panel": {
+      "P1 Up": "Up, J1 POV1U, X1 DpadUp, X1 LStickUp",
+      "P1 Down": "Down, J1 POV1D, X1 DpadDown, X1 LStickDown",
+      "P1 Left": "Left, J1 POV1L, X1 DpadLeft, X1 LStickLeft",
+      "P1 Right": "Right, J1 POV1R, X1 DpadRight, X1 LStickRight",
+      "P1 Start": "D1, J1 B10, X1 Start",
+      "P1 Button 1": "Z, J1 B1, X1 X",
+      "P1 Button 2": "X, J1 B2, X1 A",
+      "P1 Button 3": "C, J1 B3, X1 B",
+      "P1 Button 4": "A, J1 B4, X1 Y",
+      "P1 Button 5": "S, J1 B5, X1 LeftShoulder",
+      "P1 Button 6": "D, J1 B6, X1 RightShoulder",
+      "P1 Button 7": "V, J1 B7",
+      "P1 Button 8": "F, J1 B8",
+      "P1 Coin": "D5, J1 B9, X1 Back",
+      "P1 Service": "D9",
+      "P1 Test": "F2",
+      "P1 Reload": "Space",
+      "P2 Up": "J2 POV1U, X2 DpadUp, X2 LStickUp",
+      "P2 Down": "J2 POV1D, X2 DpadDown, X2 LStickDown",
+      "P2 Left": "J2 POV1L, X2 DpadLeft, X2 LStickLeft",
+      "P2 Right": "J2 POV1R, X2 DpadRight, X2 LStickRight",
+      "P2 Start": "D2, J2 B10, X2 Start",
+      "P2 Button 1": "J2 B1, X2 X",
+      "P2 Button 2": "J2 B2, X2 A",
+      "P2 Button 3": "J2 B3, X2 B",
+      "P2 Button 4": "J2 B4, X2 Y",
+      "P2 Button 5": "J2 B5, X2 LeftShoulder",
+      "P2 Button 6": "J2 B6, X2 RightShoulder",
+      "P2 Button 7": "J2 B7",
+      "P2 Button 8": "J2 B8",
+      "P2 Coin": "D6, J2 B9, X2 Back",
+      "P2 Service": "",
+      "P2 Test": "",
+      "P2 Reload": "",
+      "P3 Up": "J3 POV1U, X3 DpadUp, X3 LStickUp",
+      "P3 Down": "J3 POV1D, X3 DpadDown, X3 LStickDown",
+      "P3 Left": "J3 POV1L, X3 DpadLeft, X3 LStickLeft",
+      "P3 Right": "J3 POV1R, X3 DpadRight, X3 LStickRight",
+      "P3 Start": "J3 B10, X3 Start",
+      "P3 Button 1": "J3 B1, X3 X",
+      "P3 Button 2": "J3 B2, X3 A",
+      "P3 Button 3": "J3 B3, X3 B",
+      "P3 Button 4": "J3 B4, X3 Y",
+      "P3 Button 5": "J3 B5, X3 LeftShoulder",
+      "P3 Button 6": "J3 B6, X3 RightShoulder",
+      "P3 Button 7": "J3 B7",
+      "P3 Button 8": "J3 B8",
+      "P3 Coin": "J3 B9, X3 Back",
+      "P3 Service": "",
+      "P3 Test": "",
+      "P3 Reload": "",
+      "P4 Up": "J4 POV1U, X4 DpadUp, X4 LStickUp",
+      "P4 Down": "J4 POV1D, X4 DpadDown, X4 LStickDown",
+      "P4 Left": "J4 POV1L, X4 DpadLeft, X4 LStickLeft",
+      "P4 Right": "J4 POV1R, X4 DpadRight, X4 LStickRight",
+      "P4 Start": "J4 B10, X4 Start",
+      "P4 Button 1": "J4 B1, X4 X",
+      "P4 Button 2": "J4 B2, X4 A",
+      "P4 Button 3": "J4 B3, X4 B",
+      "P4 Button 4": "J4 B4, X4 Y",
+      "P4 Button 5": "J4 B5, X4 LeftShoulder",
+      "P4 Button 6": "J4 B6, X4 RightShoulder",
+      "P4 Button 7": "J4 B7",
+      "P4 Button 8": "J4 B8",
+      "P4 Coin": "J4 B9, X4 Back",
+      "P4 Service": "",
+      "P4 Test": "",
+      "P4 Reload": ""
     }
   },
   "AllTrollersAutoFire": {
-    "Dreamcast Controller": {}
+    "Dreamcast Controller": {},
+    "Arcade Panel": {}
   },
   "AllTrollersAnalog": {
     "Dreamcast Controller": {
@@ -220,6 +296,288 @@
       },
       "P4 Stick 2 Y": {
         "Value": "X4 RightThumbY Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      }
+    },
+    "Arcade Panel": {
+      "P1 Stick X": {
+        "Value": "X1 LeftThumbX Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P1 Stick Y": {
+        "Value": "X1 LeftThumbY Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P1 Stick 2 X": {
+        "Value": "X1 RightThumbX Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P1 Stick 2 Y": {
+        "Value": "X1 RightThumbY Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P1 Left Trigger": {
+        "Value": "X1 LeftTrigger Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.0,
+        "ButtonBindPositive": "Q",
+        "ButtonBindNegative": ""
+      },
+      "P1 Right Trigger": {
+        "Value": "X1 RightTrigger Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.0,
+        "ButtonBindPositive": "W",
+        "ButtonBindNegative": ""
+      },
+      "P1 Gun X": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P1 Gun Y": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P1 Rotary X": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P1 Rotary Y": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P2 Stick X": {
+        "Value": "X2 LeftThumbX Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P2 Stick Y": {
+        "Value": "X2 LeftThumbY Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P2 Stick 2 X": {
+        "Value": "X2 RightThumbX Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P2 Stick 2 Y": {
+        "Value": "X2 RightThumbY Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P2 Left Trigger": {
+        "Value": "X2 LeftTrigger Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.0,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P2 Right Trigger": {
+        "Value": "X2 RightTrigger Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.0,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P2 Gun X": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P2 Gun Y": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P2 Rotary X": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P2 Rotary Y": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P3 Stick X": {
+        "Value": "X3 LeftThumbX Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P3 Stick Y": {
+        "Value": "X3 LeftThumbY Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P3 Stick 2 X": {
+        "Value": "X3 RightThumbX Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P3 Stick 2 Y": {
+        "Value": "X3 RightThumbY Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P3 Left Trigger": {
+        "Value": "X3 LeftTrigger Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.0,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P3 Right Trigger": {
+        "Value": "X3 RightTrigger Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.0,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P3 Gun X": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P3 Gun Y": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P3 Rotary X": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P3 Rotary Y": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P4 Stick X": {
+        "Value": "X4 LeftThumbX Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P4 Stick Y": {
+        "Value": "X4 LeftThumbY Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P4 Stick 2 X": {
+        "Value": "X4 RightThumbX Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P4 Stick 2 Y": {
+        "Value": "X4 RightThumbY Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P4 Left Trigger": {
+        "Value": "X4 LeftTrigger Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.0,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P4 Right Trigger": {
+        "Value": "X4 RightTrigger Axis",
+        "Mult": 1.0,
+        "Deadzone": 0.0,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P4 Gun X": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P4 Gun Y": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P4 Rotary X": {
+        "Value": "",
+        "Mult": 1.0,
+        "Deadzone": 0.1,
+        "ButtonBindPositive": "",
+        "ButtonBindNegative": ""
+      },
+      "P4 Rotary Y": {
+        "Value": "",
         "Mult": 1.0,
         "Deadzone": 0.1,
         "ButtonBindPositive": "",

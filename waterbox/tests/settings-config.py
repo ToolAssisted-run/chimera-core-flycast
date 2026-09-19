@@ -15,7 +15,8 @@ cfg.setdefault("CoreSettings", {})["Chimera.Emulation.Common.Waterbox.WaterboxCo
 if len(sys.argv) > 4:
     fw = cfg.setdefault("CoreFirmware", {})
     for decl_id, path in json.loads(sys.argv[4]).items():
-        fw["Genesis Plus GX/" + decl_id] = path
-# Pick this core explicitly: an install can hold several packages claiming the GEN system, and --core only LOADS a package, it does not choose it.
-cfg.setdefault("DefaultCores", {})["GEN"] = "Genesis Plus GX"
+        fw["Flycast/" + decl_id] = path
+# Pick this core explicitly: an install can hold several packages claiming a system, and --core only LOADS a package, it does not choose it.
+for system in ("DC", "NAOMI", "NAOMI2", "AW"):
+    cfg.setdefault("DefaultCores", {})[system] = "Flycast"
 json.dump(cfg, open(sys.argv[2], "w"), indent=2)

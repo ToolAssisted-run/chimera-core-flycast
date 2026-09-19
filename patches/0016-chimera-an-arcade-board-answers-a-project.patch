@@ -1,0 +1,205 @@
+diff --git a/core/hw/naomi/naomi_cart.cpp b/core/hw/naomi/naomi_cart.cpp
+--- a/core/hw/naomi/naomi_cart.cpp
++++ b/core/hw/naomi/naomi_cart.cpp
+@@ -175,6 +175,17 @@
+ 				throw NaomiCartException(strprintf(T("Error: cannot load BIOS %s"), filename));
+ 			bios_loaded = true;
+ 		}
++		else if (CurrentCartridge != nullptr)
++		{
++			// chimera: a decrypted dump has no table entry, but its bios
++			// follows the region all the same - and this is the reload made
++			// after the game's own boot header forced one (naomi_flashrom.cpp),
++			// which upstream skips for a dump, leaving a Japan-only game to
++			// boot on the USA bios and be refused by it.
++			const char *biosName = settings.platform.isNaomi2() ? "naomi2" : "naomi";
++			if (!loadBios(biosName, nullptr, nullptr, config::Region))
++				loadBios(biosName, nullptr, nullptr, -1);
++		}
+ 		return;
+ 	}
+ 
+@@ -455,14 +466,16 @@
+ 
+ static void loadDecryptedRom(const std::string& path, const std::string& fileName, LoadProgress *progress)
+ {
+-	// Try to load BIOS from naomi.zip
+-	if (!loadBios("naomi", NULL, NULL, config::Region))
++	// chimera: the board the dump is for (see naomi_cart_GetPlatform) decides
++	// whose bios boots it; the NAOMI's cannot drive the NAOMI 2
++	const char *biosName = settings.platform.isNaomi2() ? "naomi2" : "naomi";
++	if (!loadBios(biosName, NULL, NULL, config::Region))
+ 	{
+-		WARN_LOG(NAOMI, "Warning: Region %d bios not found in naomi.zip", config::Region.get());
+-		if (!loadBios("naomi", NULL, NULL, -1))
++		WARN_LOG(NAOMI, "Warning: Region %d bios not found in %s.zip", config::Region.get(), biosName);
++		if (!loadBios(biosName, NULL, NULL, -1))
+ 		{
+ 			if (!bios_loaded)
+-				throw FlycastException(Ts("Error: cannot load BIOS from naomi.zip"));
++				throw FlycastException(strprintf(T("Error: cannot load BIOS from %s.zip"), biosName));
+ 		}
+ 	}
+ 
+@@ -812,7 +825,31 @@
+ 	settings.naomi.multiboard = false;
+ 	const Game *game = FindGame(path);
+ 	if (game == nullptr)
++	{
++		// chimera: a decrypted dump (.bin/.dat) is not in the table, but its
++		// boot header says which board it is for - "Naomi2" for the NAOMI 2 -
++		// and the board must be known before the machine is built. Without
++		// this every such dump is a NAOMI and a NAOMI 2 game boots without
++		// its Elan.
++		std::string ext = get_file_extension(path);
++		if (ext == "bin" || ext == "dat")
++		{
++			hostfs::File *fp = nullptr;
++			try {
++				fp = hostfs::storage().openFile(path, "rb");
++			} catch (const hostfs::StorageException&) {
++			}
++			if (fp != nullptr)
++			{
++				char head[16] {};
++				fp->read(head, 1, sizeof(head));
++				delete fp;
++				if (!memcmp(head, "Naomi2", 6))
++					return DC_PLATFORM_NAOMI2;
++			}
++		}
+ 		return DC_PLATFORM_NAOMI;
++	}
+ 	else if (game->cart_type == AW)
+ 		return DC_PLATFORM_ATOMISWAVE;
+ 	else if (game->bios != nullptr && !strcmp("naomi2", game->bios))
+diff --git a/core/emulator.cpp b/core/emulator.cpp
+--- a/core/emulator.cpp
++++ b/core/emulator.cpp
+@@ -553,7 +553,10 @@
+ 		return DC_PLATFORM_DREAMCAST;	// unknown
+ 	if (extension == "zip" || extension == "7z")
+ 		return naomi_cart_GetPlatform(filename.c_str());
+-	if (extension == "bin" || extension == "dat" || extension == "lst")
++	if (extension == "bin" || extension == "dat")
++		// chimera: the dump's own boot header says which board (NAOMI or NAOMI 2)
++		return naomi_cart_GetPlatform(filename.c_str());
++	if (extension == "lst")
+ 		return DC_PLATFORM_NAOMI;
+ 
+ 	return DC_PLATFORM_DREAMCAST;
+diff --git a/core/hw/naomi/gdcartridge.cpp b/core/hw/naomi/gdcartridge.cpp
+--- a/core/hw/naomi/gdcartridge.cpp
++++ b/core/hw/naomi/gdcartridge.cpp
+@@ -522,6 +522,23 @@
+ 					WARN_LOG(NAOMI, "Opening parent chd failed: %s", e.what());
+ 				}
+ 			}
++			// chimera: a project mounts its files flat, beside the zip rather
++			// than in a folder named after the game - so the disc is also
++			// looked for right there, by its own name, in any form OpenDisc
++			// reads (a TOSEC .gdi or .cue as well as MAME's .chd)
++			if (gdrom == nullptr)
++			{
++				static const char *const forms[] = { ".chd", ".gdi", ".cue" };
++				for (const char *form : forms)
++				{
++					try {
++						std::string flat = hostfs::storage().getSubPath(parent, std::string(gdrom_name) + form);
++						gdrom = std::unique_ptr<Disc>(OpenDisc(flat, digest));
++						break;
++					} catch (const FlycastException& e) {
++					}
++				}
++			}
+ 			if (gdrom == nullptr)
+ 				throw NaomiCartException(strprintf(i18n::T("Naomi GDROM: Cannot open %s.chd"), gdrom_path.c_str()));
+ 		}
+diff --git a/core/hw/maple/maple_jvs.cpp b/core/hw/maple/maple_jvs.cpp
+--- a/core/hw/maple/maple_jvs.cpp
++++ b/core/hw/maple/maple_jvs.cpp
+@@ -34,6 +34,21 @@
+ 
+ #define LOGJVS(...) DEBUG_LOG(JVS, __VA_ARGS__)
+ 
++/* chimera: the game asking its I/O board for the panel is what a lag frame
++ * IS on an arcade board, as the controller read is on a Dreamcast (see
++ * maple_devs.cpp, which defines the weak default). */
++extern "C" void chimera_input_was_read();
++
++/* chimera: true when the host owns the arcade board's EEPROM and NVRAM - part
++ * of the machine, carried by its savestate, exported and seeded through the
++ * host's own save-data channel - so nothing is ever WRITTEN to a file on a
++ * change: a file left behind would make the next run a function of this one.
++ * A file is still READ at power-on, because the only way one exists in the
++ * sandbox is that the project put it there to start from. Weak: a build
++ * without a host reads and writes its files as upstream does. */
++extern "C" bool chimera_arcade_nvram_in_memory() __attribute__((weak));
++extern "C" bool chimera_arcade_nvram_in_memory() { return false; }
++
+ u8 *EEPROM;
+ 
+ const u32 naomi_button_mapping[32] = {
+@@ -1893,7 +1908,7 @@
+ 			memcpy(eeprom + address, dma_buffer_in + 4, size);
+ 
+ 			std::string eeprom_file = getEepromPath();
+-			if (!eeprom_file.empty())
++			if (!eeprom_file.empty() && !chimera_arcade_nvram_in_memory())
+ 			{
+ 				FILE* f = nowide::fopen(eeprom_file.c_str(), "wb");
+ 				if (f)
+@@ -2196,6 +2211,7 @@
+ 		if ((jvs_cmd >= 0x20 && jvs_cmd <= 0x38) || jvs_cmd == 0x74) // Read inputs and more
+ 		{
+ 			LOGJVS("JVS Node %d: ", node_id);
++			chimera_input_was_read();
+ 			u32 buttons[4] {};
+ #ifdef LIBRETRO
+ 			for (int p = 0; p < 4; p++)
+diff --git a/core/hw/flashrom/nvmem.cpp b/core/hw/flashrom/nvmem.cpp
+--- a/core/hw/flashrom/nvmem.cpp
++++ b/core/hw/flashrom/nvmem.cpp
+@@ -251,6 +251,10 @@
+ 		sys_rom->Load(buffer.get(), size);
+ }
+ 
++// chimera: see maple_jvs.cpp - the host owning the board's NVRAM: nothing is
++// written to a file; a file the project mounted is still read at power-on
++extern "C" bool chimera_arcade_nvram_in_memory() __attribute__((weak));
++
+ static std::string getArcadeFlashPath()
+ {
+ 	std::string suffix;
+@@ -330,6 +334,8 @@
+ {
+ 	if (settings.naomi.slave || settings.naomi.drivingSimSlave)
+ 		return;
++	if (settings.platform.isArcade() && chimera_arcade_nvram_in_memory != nullptr && chimera_arcade_nvram_in_memory())
++		return;
+ 	if (settings.platform.isConsole())
+ 		sys_nvmem->Save(getRomPrefix(), "nvmem.bin", "nvmem");
+ 	else
+diff --git a/core/stdclass.cpp b/core/stdclass.cpp
+--- a/core/stdclass.cpp
++++ b/core/stdclass.cpp
+@@ -32,11 +32,17 @@
+ 
+ static void appendPathSep(std::string& str)
+ {
++	// chimera: an EMPTY directory stays empty. It means "right here", and a
++	// name joined onto it is the bare name - which is the only spelling a
++	// sandbox serving exactly the files it was given answers to ("./naomi.zip"
++	// is not "naomi.zip" there). The same rule patch 0004 gave getParentPath.
++	if (str.empty())
++		return;
+ #ifdef _WIN32
+-	if (str.empty() || (str.back() != '/' && str.back() != '\\'))
++	if (str.back() != '/' && str.back() != '\\')
+ 		str += '\\';
+ #else
+-	if (str.empty() || str.back() != '/')
++	if (str.back() != '/')
+ 		str += '/';
+ #endif
+ }

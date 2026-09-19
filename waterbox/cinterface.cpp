@@ -62,6 +62,9 @@ bool chimera_gl_available() { return g_glUp; }
 #include "hw/pvr/pvr_mem.h"
 #include "hw/flashrom/nvmem.h"
 #include "hw/pvr/Renderer_if.h"
+#include "hw/naomi/naomi_cart.h"
+#include "hw/naomi/naomi_roms.h"
+#include "log/LogManager.h"
 #include "stdclass.h"
 
 /* ---------------------------------------------------------------------------
@@ -71,10 +74,18 @@ bool chimera_gl_available() { return g_glUp; }
  */
 #define DC_WIDTH 640
 #define DC_HEIGHT 480
+/* the buffer holds a 640x480 frame either way up: a vertical arcade game is
+ * turned in GetVideoBgra and comes out 480x640 */
+#define VIDEO_CAPACITY (DC_WIDTH * DC_WIDTH)
 #define MAX_SAMPLES 8192
 
 static char g_loadError[512];
-static uint32_t g_video[DC_WIDTH * DC_HEIGHT];
+static uint32_t g_video[VIDEO_CAPACITY];
+/* the rotation setting: turn a vertical arcade game's frame (see RotateForCabinet) */
+static bool g_rotateForCabinet;
+/* waterbox/zip-archive.cpp: why the last archive would not open */
+extern "C" const char *chimera_archive_last_error(void);
+static void RegisterArcadeSaves();
 static int g_videoWidth = DC_WIDTH;
 static int g_videoHeight = DC_HEIGHT;
 static int16_t g_soundOut[MAX_SAMPLES * 2];
@@ -126,6 +137,40 @@ enum {
 #define AXIS_COUNT (AXIS_PER_PORT * DC_PORTS)
 static int16_t g_axes[AXIS_COUNT];
 
+/* WHICH MACHINE. One core.wbx is four (waterbox.config's machines): the
+ * Dreamcast, and the arcade boards Sega built from its parts. The machine
+ * setting says which, once, at Init - it decides the wire, the files and the
+ * bios, and a movie cites it. */
+enum Machine { MACHINE_DC, MACHINE_NAOMI, MACHINE_NAOMI2, MACHINE_AW };
+static Machine g_machine = MACHINE_DC;
+static bool IsArcade() { return g_machine != MACHINE_DC; }
+
+/* The ARCADE wire: the JVS panel, per player, in the order waterbox.config's
+ * arcade machines declare it. A different list from the Dreamcast's - the
+ * frontend indexes SetButton by the machine's own declaration - so it has its
+ * own enum and its own mapping onto mapleInputState, whose kcode bits the JVS
+ * board (maple_jvs.cpp, naomi_button_mapping) turns into arcade keys:
+ * A=Button 1 .. Z=Button 6, D=Coin, the second d-pad's Up/Down=Service/Test
+ * and Left/Right=Button 7/8. */
+#define ARC_PLAYERS 4
+enum {
+	ARC_UP, ARC_DOWN, ARC_LEFT, ARC_RIGHT, ARC_START,
+	ARC_BTN1, ARC_BTN2, ARC_BTN3, ARC_BTN4, ARC_BTN5, ARC_BTN6, ARC_BTN7, ARC_BTN8,
+	ARC_COIN, ARC_SERVICE, ARC_TEST, ARC_RELOAD,
+	ARC_BTN_PER_PLAYER
+};
+enum {
+	ARC_AXIS_X, ARC_AXIS_Y, ARC_AXIS_X2, ARC_AXIS_Y2,
+	ARC_AXIS_LTRIG, ARC_AXIS_RTRIG,
+	ARC_AXIS_GUN_X, ARC_AXIS_GUN_Y,
+	ARC_AXIS_ROT_X, ARC_AXIS_ROT_Y,
+	ARC_AXIS_PER_PLAYER
+};
+#define ARC_BTN_COUNT (ARC_BTN_PER_PLAYER * ARC_PLAYERS)
+#define ARC_AXIS_COUNT (ARC_AXIS_PER_PLAYER * ARC_PLAYERS)
+static_assert(ARC_BTN_COUNT <= BTN_COUNT, "the button arrays are sized for the wider wire");
+static_assert(ARC_AXIS_COUNT <= AXIS_COUNT, "the axis arrays are sized for the wider wire");
+
 static void ResetAxesToNeutral()
 {
 	for (int p = 0; p < DC_PORTS; p++)
@@ -135,6 +180,14 @@ static void ResetAxesToNeutral()
 		a[AXIS_LTRIG] = -32768;
 		a[AXIS_RTRIG] = -32768;
 	}
+	if (IsArcade())
+		for (int p = 0; p < ARC_PLAYERS; p++)
+		{
+			int16_t *a = &g_axes[p * ARC_AXIS_PER_PLAYER];
+			for (int i = 0; i < ARC_AXIS_PER_PLAYER; i++) a[i] = 0;
+			a[ARC_AXIS_LTRIG] = -32768;
+			a[ARC_AXIS_RTRIG] = -32768;
+		}
 }
 
 /* What each port is: MDT_None, or one of the devices waterbox.config offers.
@@ -167,6 +220,18 @@ static bool IsControllerFamily(MapleDeviceType t)
  * patches/ adds a call to this where maple answers a controller read.
  */
 extern "C" void chimera_input_was_read(void) { g_inputRead = 1; }
+
+/* The arcade board's EEPROM (the JVS board's 128 bytes: coin settings, the
+ * game's own options) and NVRAM (the bios's battery-backed RAM) are the
+ * host's. Upstream reads them from files beside the rom at power-on and
+ * writes them back on every change, which makes the machine a function of
+ * what an earlier run left on disk - the native reference read its own
+ * previous run's .eeprom and disagreed with the sandbox until this. Here
+ * nothing is written: they are the machine's state, the savestate carries
+ * them, and they leave through the save-data channel (RegisterArcadeSaves)
+ * under the very names upstream reads at power-on - so a project that
+ * mounts them back starts from a board somebody has set up. (patches/0016) */
+extern "C" bool chimera_arcade_nvram_in_memory(void) { return true; }
 
 /* Where the AICA's output leaves the machine. Flycast calls this once per
  * sample pair from the sound chip's mixer (sgc_if.cpp), and upstream's own
@@ -271,8 +336,54 @@ static void ApplyInputPort(int port)
  * what is written there is never looked at - but it is written anyway, because
  * "the state of a port nobody asked about" is not something a movie should have
  * to think about. */
+/* The arcade panel into the same mapleInputState, player by player. The JVS
+ * board reads kcode through naomi_button_mapping (Atomiswave through
+ * awave_button_mapping, the same shape), so the panel's buttons go in as the
+ * Dreamcast buttons those tables translate. The analog side is what
+ * jvs_io_board::read_analog_axis and read_lightgun look at: fullAxes 0..3 are
+ * JVS analog channels 0..3, the triggers are what the driving boards read as
+ * gas and brake, absPos is the gun, relPos the rotary encoders. */
+static void ApplyArcadeInputPlayer(int player)
+{
+	MapleInputState& pad = mapleInputState[player];
+	const uint8_t *btn = &g_buttons[player * ARC_BTN_PER_PLAYER];
+	const int16_t *ax = &g_axes[player * ARC_AXIS_PER_PLAYER];
+
+	u32 code = ~0u; /* ACTIVE LOW, as the Dreamcast's */
+	static const struct { int wire; u32 mask; } map[] = {
+		{ ARC_UP, DC_DPAD_UP }, { ARC_DOWN, DC_DPAD_DOWN },
+		{ ARC_LEFT, DC_DPAD_LEFT }, { ARC_RIGHT, DC_DPAD_RIGHT },
+		{ ARC_START, DC_BTN_START },
+		{ ARC_BTN1, DC_BTN_A }, { ARC_BTN2, DC_BTN_B }, { ARC_BTN3, DC_BTN_C },
+		{ ARC_BTN4, DC_BTN_X }, { ARC_BTN5, DC_BTN_Y }, { ARC_BTN6, DC_BTN_Z },
+		{ ARC_BTN7, DC_DPAD2_LEFT }, { ARC_BTN8, DC_DPAD2_RIGHT },
+		{ ARC_COIN, DC_BTN_D }, { ARC_SERVICE, DC_DPAD2_UP }, { ARC_TEST, DC_DPAD2_DOWN },
+		{ ARC_RELOAD, DC_BTN_RELOAD },
+	};
+	for (size_t i = 0; i < sizeof(map) / sizeof(map[0]); i++)
+		if (btn[map[i].wire]) code &= ~map[i].mask;
+	pad.kcode = code;
+
+	pad.fullAxes[PJAI_X1] = ax[ARC_AXIS_X];
+	pad.fullAxes[PJAI_Y1] = ax[ARC_AXIS_Y];
+	pad.fullAxes[PJAI_X2] = ax[ARC_AXIS_X2];
+	pad.fullAxes[PJAI_Y2] = ax[ARC_AXIS_Y2];
+	pad.halfAxes[PJTI_L] = (u16)(ax[ARC_AXIS_LTRIG] + 32768);
+	pad.halfAxes[PJTI_R] = (u16)(ax[ARC_AXIS_RTRIG] + 32768);
+	pad.absPos.x = (int)(((int32_t)ax[ARC_AXIS_GUN_X] + 32768) * 640 / 65536);
+	pad.absPos.y = (int)(((int32_t)ax[ARC_AXIS_GUN_Y] + 32768) * 480 / 65536);
+	pad.relPos.x += ax[ARC_AXIS_ROT_X];
+	pad.relPos.y += ax[ARC_AXIS_ROT_Y];
+}
+
 static void ApplyInput()
 {
+	if (IsArcade())
+	{
+		for (int player = 0; player < ARC_PLAYERS; player++)
+			ApplyArcadeInputPlayer(player);
+		return;
+	}
 	for (int port = 0; port < DC_PORTS; port++)
 		ApplyInputPort(port);
 }
@@ -366,6 +477,15 @@ static void ApplyMachineSettings()
 	config::setTransient("config", "Dreamcast.Broadcast",
 		std::to_string(SettingIndex("broadcast", broadcasts, 4, 0)));
 
+	/* The arcade boards' coin setting. Flycast writes it into the game's
+	 * EEPROM as it configures the machine (naomi_flashrom.cpp), which happens
+	 * inside loadGame after the options were reloaded - so, transient. */
+	{
+		static const char *const coinage[] = { "freePlay", "coins" };
+		config::setTransient("config", "ForceFreePlay",
+			SettingIndex("coinage", coinage, 2, 0) == 0 ? "yes" : "no");
+	}
+
 	/* What is plugged into each of the four ports.
 	 *
 	 * TRANSIENT, and for a harder reason than the region's. The maple devices
@@ -408,6 +528,126 @@ static void ApplyMachineSettings()
 	}
 }
 
+/* ---------------------------------------------------------------------------
+ * THE ARCADE GAME among the rom-set slot's files.
+ *
+ * A project puts up to three files there: the game's zip, the parent zip a
+ * clone leans on, and the disc of a GD-ROM game. Flycast identifies a set by
+ * its NAME against its own table (FindGame over naomi_roms.cpp), so the game
+ * is the zip the table knows; when two are known, the one whose parent is the
+ * other. A decrypted dump (.bin/.dat/.lst, the nullDC form) is taken as it is.
+ * The disc is found by Flycast itself, beside the zip (patch 0016).
+ */
+static const Game *KnownGame(const std::string &fileName)
+{
+	std::string stem = fileName;
+	const size_t slash = stem.find_last_of('/');
+	if (slash != std::string::npos) stem.erase(0, slash + 1);
+	const size_t dot = stem.find_last_of('.');
+	if (dot != std::string::npos) stem.erase(dot);
+	for (int i = 0; Games[i].name != nullptr; i++)
+		if (stem == Games[i].name) return &Games[i];
+	return nullptr;
+}
+
+static bool HasSuffix(const std::string &name, const char *suffix)
+{
+	const size_t n = strlen(suffix);
+	if (name.size() < n) return false;
+	std::string tail = name.substr(name.size() - n);
+	for (char &c : tail) c = (char)tolower((unsigned char)c);
+	return tail == suffix;
+}
+
+static bool PickArcadeRom(std::string &chosen)
+{
+	std::vector<std::string> files;
+	{
+		char entry[512];
+		const int32_t n = wbx_slot_count("romset");
+		for (int32_t i = 0; i < n; i++)
+			if (wbx_slot_name("romset", i, entry, sizeof(entry)) != nullptr)
+				files.emplace_back(entry);
+	}
+	/* a rom opened directly, with no project: the engine mounts it under its
+	 * own name too and says which in rom.name (a leading slash and all), and
+	 * the basename is what Flycast recognises a set by */
+	if (files.empty())
+	{
+		FILE *f = fopen("rom.name", "rb");
+		if (f != nullptr)
+		{
+			char buf[512];
+			size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+			fclose(f);
+			buf[n] = '\0';
+			/* verbatim: the alias is mounted with its slash, and that is the
+			 * name that finds it */
+			if (buf[0] != '\0') files.emplace_back(buf);
+		}
+	}
+	if (files.empty())
+	{
+		snprintf(g_loadError, sizeof(g_loadError), "no rom set: the project's Rom set slot is empty");
+		return false;
+	}
+
+	std::vector<const Game *> known(files.size(), nullptr);
+	for (size_t i = 0; i < files.size(); i++)
+		if (HasSuffix(files[i], ".zip")) known[i] = KnownGame(files[i]);
+
+	/* a clone beside its parent: the clone is the game */
+	for (size_t i = 0; i < files.size(); i++)
+	{
+		if (known[i] == nullptr || known[i]->parent_name == nullptr) continue;
+		for (size_t j = 0; j < files.size(); j++)
+			if (j != i && known[j] != nullptr && !strcmp(known[j]->name, known[i]->parent_name))
+			{
+				chosen = files[i];
+				return true;
+			}
+	}
+	for (size_t i = 0; i < files.size(); i++)
+		if (known[i] != nullptr) { chosen = files[i]; return true; }
+	for (size_t i = 0; i < files.size(); i++)
+		if (HasSuffix(files[i], ".bin") || HasSuffix(files[i], ".dat") || HasSuffix(files[i], ".lst"))
+		{
+			chosen = files[i];
+			return true;
+		}
+
+	std::string list;
+	for (const std::string &f : files) list += (list.empty() ? "" : ", ") + f;
+	snprintf(g_loadError, sizeof(g_loadError),
+		"no rom set Flycast knows among: %s. A MAME set is recognised by its zip's name "
+		"(vf4.zip, ikaruga.zip), so a renamed zip is an unknown game; a decrypted dump "
+		"must end in .bin, .dat or .lst.", list.c_str());
+	return false;
+}
+
+static const char *BoardName(int platform)
+{
+	switch (platform)
+	{
+		case DC_PLATFORM_NAOMI: return "NAOMI";
+		case DC_PLATFORM_NAOMI2: return "NAOMI 2";
+		case DC_PLATFORM_ATOMISWAVE: return "Atomiswave";
+		case DC_PLATFORM_SYSTEMSP: return "System SP";
+		default: return "Dreamcast";
+	}
+}
+
+static int MachinePlatform(Machine m)
+{
+	switch (m)
+	{
+		case MACHINE_NAOMI: return DC_PLATFORM_NAOMI;
+		case MACHINE_NAOMI2: return DC_PLATFORM_NAOMI2;
+		case MACHINE_AW: return DC_PLATFORM_ATOMISWAVE;
+		default: return DC_PLATFORM_DREAMCAST;
+	}
+}
+
 /* Which bios this machine runs, which is a PROJECT decision rather than a
  * question about what files happen to be lying around: a machine with its own
  * bios and one with an HLE reimplementation are different machines and do not
@@ -429,6 +669,10 @@ ECL_EXPORT const char *GetLoadError(void) { return g_loadError; }
 ECL_EXPORT int Init(void)
 {
 	g_loadError[0] = '\0';
+	{
+		static const char *const machines[] = { "dreamcast", "naomi", "naomi2", "atomiswave" };
+		g_machine = (Machine)SettingIndex("machine", machines, 4, 0);
+	}
 	ResetAxesToNeutral();
 
 	/* Save data the project brought is mounted under its own name and the
@@ -438,26 +682,54 @@ ECL_EXPORT int Init(void)
 	 * ignored, which is worse than not booting. */
 	{
 		char entry[512];
-		const int32_t saves = wbx_slot_count("savedata");
+		const char *slot = IsArcade() ? "boardmemory" : "savedata";
+		const int32_t saves = wbx_slot_count(slot);
 		for (int32_t i = 0; i < saves; i++)
 		{
-			if (wbx_slot_name("savedata", i, entry, sizeof(entry)) == nullptr)
+			if (wbx_slot_name(slot, i, entry, sizeof(entry)) == nullptr)
 				continue;
-			if (strncmp(entry, "vmu_", 4) != 0)
+			const bool card = strncmp(entry, "vmu_", 4) == 0;
+			const bool board = HasSuffix(entry, ".eeprom") || HasSuffix(entry, ".nvmem") || HasSuffix(entry, ".nvmem2");
+			if (IsArcade() ? !(board || card) : !card)
 			{
-				snprintf(g_loadError, sizeof(g_loadError),
-					"this machine does not read save data called \"%s\". Its cards are "
-					"vmu_A1.bin through vmu_D1.bin, one per connected controller - the "
-					"names Export Save Data writes.", entry);
+				if (IsArcade())
+					snprintf(g_loadError, sizeof(g_loadError),
+						"this machine does not read save data called \"%s\". An arcade board's "
+						"memory is <rom set>.eeprom and <rom set>.nvmem, and its memory cards "
+						"vmu_B1.bin and vmu_C1.bin - the names Export Save Data writes.", entry);
+				else
+					snprintf(g_loadError, sizeof(g_loadError),
+						"this machine does not read save data called \"%s\". Its cards are "
+						"vmu_A1.bin through vmu_D1.bin, one per connected controller - the "
+						"names Export Save Data writes.", entry);
 				return 0;
 			}
 		}
 	}
 
-	/* the disc: the project slot's file, else the plain mount */
+	/* the disc: the project slot's file, else the plain mount. An arcade
+	 * machine's game is the rom set instead, and the set must be for THIS
+	 * board: the machine is the project's, and a set for another is refused
+	 * rather than run as something it is not. */
 	char name[512];
 	const char *file = "disc";
-	if (wbx_slot_count("disc") > 0 && wbx_slot_name("disc", 0, name, sizeof(name)) != nullptr)
+	std::string arcadeRom;
+	if (IsArcade())
+	{
+		if (!PickArcadeRom(arcadeRom))
+			return 0;
+		file = arcadeRom.c_str();
+		const int board = naomi_cart_GetPlatform(file);
+		if (board != MachinePlatform(g_machine))
+		{
+			snprintf(g_loadError, sizeof(g_loadError),
+				"%s is a %s game and this project's machine is the %s. The machine is the "
+				"project's: make a project for the %s, or pick a set for this one.",
+				file, BoardName(board), BoardName(MachinePlatform(g_machine)), BoardName(board));
+			return 0;
+		}
+	}
+	else if (wbx_slot_count("disc") > 0 && wbx_slot_name("disc", 0, name, sizeof(name)) != nullptr)
 		file = name;
 
 	/* Where Flycast looks for the things a machine is made of. The sandbox
@@ -468,8 +740,23 @@ ECL_EXPORT int Init(void)
 	 * core/reios runs instead, which is what every gate here uses. */
 	g_rtc = (uint32_t)wbx_setting_long("rtc", 0);
 
-	set_user_data_dir("./");
-	add_system_data_dir("./");
+	/* Flycast's own log, to stderr, at warning level: what the machine says
+	 * about a rom set it refuses or a bios it cannot find is worth having
+	 * in the frontend's log (miniBox delivers a guest's stderr there). The
+	 * console listener is the only one; patch 0001 removed the network one. */
+	if (LogManager::GetInstance() == nullptr)
+	{
+		config::setTransient("log", "Verbosity", std::to_string((int)LogTypes::LWARNING));
+		config::setTransient("log", "LogToConsole", "yes");
+		LogManager::Init();
+	}
+
+	/* "" and not "./": the sandbox serves exactly the files it was given, by
+	 * the names it was given them under, and "./naomi.zip" is not one of
+	 * them. Flycast joins a data dir onto a name with a separator between;
+	 * patch 0016 lets an empty dir stay empty, so the join IS the name. */
+	set_user_data_dir("");
+	add_system_data_dir("");
 	config::UseReios = !UseRealBios();
 
 	ApplyMachineSettings();
@@ -513,6 +800,10 @@ ECL_EXPORT int Init(void)
 		}
 		config::AutoLoadState = false;
 		config::AutoSaveState = false;
+		{
+			static const char *const rotations[] = { "cabinet", "none" };
+			g_rotateForCabinet = IsArcade() && SettingIndex("rotation", rotations, 2, 0) == 0;
+		}
 
 		ApplyMachineSettings();
 
@@ -564,10 +855,18 @@ ECL_EXPORT int Init(void)
 		}
 
 		emu.start();
+		if (IsArcade())
+			RegisterArcadeSaves();
 	}
 	catch (const std::exception &e)
 	{
-		snprintf(g_loadError, sizeof(g_loadError), "%s", e.what());
+		/* the archive layer's own reason, when it had one: Flycast's message
+		 * stops at "Cannot open X" */
+		const char *why = IsArcade() ? chimera_archive_last_error() : "";
+		if (why != nullptr && why[0] != '\0')
+			snprintf(g_loadError, sizeof(g_loadError), "%s (%s)", e.what(), why);
+		else
+			snprintf(g_loadError, sizeof(g_loadError), "%s", e.what());
 		return 0;
 	}
 	catch (...)
@@ -616,6 +915,9 @@ static u32 DeviceButtonMask(MapleDeviceType type)
 
 ECL_EXPORT int IsButtonActive(int index)
 {
+	/* the arcade panel is the JVS board's whole wire; which of it a game
+	 * reads is the game's business, not something the machine can say */
+	if (IsArcade()) return index >= 0 && index < ARC_BTN_COUNT ? 1 : 0;
 	if (index < 0 || index >= BTN_COUNT) return 0;
 	const int port = index / BTN_PER_PORT;
 	const int wire = index % BTN_PER_PORT;
@@ -640,6 +942,7 @@ ECL_EXPORT int IsButtonActive(int index)
 
 ECL_EXPORT int IsAxisActive(int index)
 {
+	if (IsArcade()) return index >= 0 && index < ARC_AXIS_COUNT ? 1 : 0;
 	if (index < 0 || index >= AXIS_COUNT) return 0;
 	const int wire = index % AXIS_PER_PORT;
 	const MapleDeviceType device = g_portDevice[index / AXIS_PER_PORT];
@@ -694,6 +997,30 @@ ECL_EXPORT void FrameAdvance(uint64_t packed)
  * the framebuffer. */
 extern "C" const uint32_t *chimera_refsw_frame(int *width, int *height);
 
+/* A vertical arcade game, turned the way its cabinet's monitor was mounted.
+ * Flycast marks such a set in its table (ROT270) and raises Rotate90 for it,
+ * which its own renderers honour on the way to the screen; this core reads the
+ * frame back before that, so the turn is made here, once, on the readback -
+ * and only when the project asks (the rotation setting), because either way
+ * the machine ran the same. A 640x480 frame becomes 480x640; the buffer has
+ * room for it. */
+static void RotateForCabinet()
+{
+	if (!g_rotateForCabinet || !config::Rotate90) return;
+	const int w = g_videoWidth, h = g_videoHeight;
+	if (w <= 0 || h <= 0 || (size_t)w * h > VIDEO_CAPACITY) return;
+	static std::vector<uint32_t> turned;
+	turned.resize((size_t)w * h);
+	/* 270 degrees: the frame's left edge becomes the bottom, so a shooter
+	 * whose scroll ran right-to-left in the sideways frame reads upwards */
+	for (int y = 0; y < h; y++)
+		for (int x = 0; x < w; x++)
+			turned[(size_t)(w - 1 - x) * h + y] = g_video[(size_t)y * w + x];
+	memcpy(g_video, turned.data(), turned.size() * sizeof(uint32_t));
+	g_videoWidth = h;
+	g_videoHeight = w;
+}
+
 ECL_EXPORT uint32_t *GetVideoBgra(void)
 {
 #if defined(CHIMERA_GUEST_GL)
@@ -720,6 +1047,7 @@ ECL_EXPORT uint32_t *GetVideoBgra(void)
 				for (int x = 0; x < w; x++, src += 3)
 					dst[x] = 0xFF000000u | (src[0] << 16) | (src[1] << 8) | src[2];
 			}
+			RotateForCabinet();
 		}
 		return g_video;
 	}
@@ -730,6 +1058,7 @@ ECL_EXPORT uint32_t *GetVideoBgra(void)
 	g_videoWidth = w;
 	g_videoHeight = h;
 	memcpy(g_video, frame, (size_t)w * h * sizeof(uint32_t));
+	RotateForCabinet();
 	return g_video;
 }
 
@@ -821,7 +1150,7 @@ ECL_EXPORT int GetMemoryDomainWritable(int which)
 #define MAX_VMUS 4
 
 static struct {
-	char name[32];
+	char name[300]; /* a card's name, or a rom set's file name plus a suffix */
 	uint8_t *flash;
 	unsigned size;
 } g_vmus[MAX_VMUS];
@@ -858,6 +1187,34 @@ extern "C" bool chimera_register_vmu(const char *port, uint8_t *flash, unsigned 
 				g_vmus[g_vmuCount - 1].name, got, size);
 	}
 	return true;
+}
+
+/* The arcade board's memory, through the same channel as the cards: the JVS
+ * board's EEPROM (NAOMI and NAOMI 2; the Atomiswave has none) and the bios's
+ * battery-backed RAM. Named as upstream names its own files - the rom set's
+ * file name plus .eeprom / .nvmem - because that is the name Flycast reads
+ * at power-on, so a project that mounts an export back seeds the board
+ * through upstream's own path (the save-data slot; patch 0016 lets the read
+ * stand and stops only the write). Registered after loadGame, which is when
+ * the board exists; the buffers are the live ones, so an export is what the
+ * board holds at that moment. */
+static void RegisterArcadeSaves()
+{
+	const std::string stem = settings.content.fileName;
+	if (EEPROM != nullptr && g_vmuCount < MAX_VMUS)
+	{
+		snprintf(g_vmus[g_vmuCount].name, sizeof(g_vmus[g_vmuCount].name), "%s.eeprom", stem.c_str());
+		g_vmus[g_vmuCount].flash = EEPROM;
+		g_vmus[g_vmuCount].size = 0x80;
+		g_vmuCount++;
+	}
+	if (nvmem::getFlashData() != nullptr && settings.platform.flash_size > 0 && g_vmuCount < MAX_VMUS)
+	{
+		snprintf(g_vmus[g_vmuCount].name, sizeof(g_vmus[g_vmuCount].name), "%s.nvmem", stem.c_str());
+		g_vmus[g_vmuCount].flash = nvmem::getFlashData();
+		g_vmus[g_vmuCount].size = settings.platform.flash_size;
+		g_vmuCount++;
+	}
 }
 
 extern "C" {
