@@ -53,7 +53,9 @@
       "exposedWhen": {
         "setting": "machine",
         "is": "dreamcast"
-      }
+      },
+      "namePattern": "^vmu_[A-D][12]\\.bin$",
+      "nameHelp": "a memory card is read by its name: vmu_A1.bin through vmu_D1.bin, the first card of each connected controller (vmu_A2..vmu_D2 the second) - the names Export Save Data writes. Rename the file to the card it should be."
     },
     {
       "id": "boardmemory",
@@ -73,7 +75,9 @@
           "naomi2",
           "atomiswave"
         ]
-      }
+      },
+      "namePattern": "\\.(eeprom|nvmem|nvmem2)$|^vmu_[A-D][12]\\.bin$",
+      "nameHelp": "the board's memory is read by name: <rom set>.eeprom, <rom set>.nvmem, and the cards vmu_B1.bin / vmu_C1.bin - the names Export Save Data writes."
     }
   ]
 }
