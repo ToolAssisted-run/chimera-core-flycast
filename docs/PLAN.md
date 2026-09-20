@@ -137,6 +137,16 @@ Chimera's firmware channel once the machine runs.
     memory, which is where the PVR reads them from) and the video clock, so the
     gate checks a 640x480 picture of a red triangle of exactly 60000 pixels on
     blue - every number one the program asked for.
+  - WHAT triangle.elf DOES NOT STAND IN FOR (chimera docs/gates.md, mode E).
+    It submits one untextured, flat-shaded polygon and nothing else, so the
+    renderer legs that use it - `render:drew`, `render:shape` and
+    `picture:onlyThePicture` - never put a texture in the cache, never hold a
+    cache section over a render target, and never run a second render pass.
+    The state-load crash of chimera issue #110 is precisely that condition:
+    no amount of running these legs could have found it. Until a program here
+    draws a texture (Textures, under What remains), the renderer's claim in
+    this gate is "it rasterises a flat polygon correctly, at the sizes asked
+    for, identically in both flavors", and no more than that.
 - **M4 DONE** (2026-08-27): discs, memory cards and firmware.
   `waterbox/run-gate.sh`: 21/21.
   - `tests/make-testdisc.py` builds a GD-ROM from scratch - three tracks, an

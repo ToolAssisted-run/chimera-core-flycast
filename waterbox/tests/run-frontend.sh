@@ -78,7 +78,12 @@ sed -i 's/"DispMethod": [0-9]/"DispMethod": 1/' "$config"
 
 ok=0
 failed=0
-report() { printf "%-28s %-9s %s\n" "$1" "$2" "$3"; case "$2" in PASS) ok=$((ok+1)) ;; *) failed=$((failed+1)) ;; esac; }
+skipped=0
+# SKIP had no case of its own here, so it fell through to the default and
+# counted as a FAILURE - which is why the arcade legs below were written to
+# vanish without a word rather than say they had been skipped. Counted and
+# printed now, like the core gate's.
+report() { printf "%-28s %-9s %s\n" "$1" "$2" "$3"; case "$2" in PASS) ok=$((ok+1)) ;; SKIP) skipped=$((skipped+1)) ;; *) failed=$((failed+1)) ;; esac; }
 printf "%-28s %-9s %s\n" "Check" "Result" "Detail"
 printf "%-28s %-9s %s\n" "-----" "------" "------"
 
@@ -184,6 +189,9 @@ if [ -n "${FLYCAST_ARCADE_ROMS:-}" ] && [ -f "$FLYCAST_ARCADE_ROMS/naomi.zip" ];
 	else
 		report "arcade:keybinds" FAIL "$(head -1 "$work/arcadekeys.txt")"
 	fi
+else
+	report "arcade:frontend" SKIP "set FLYCAST_ARCADE_ROMS to a folder with naomi.zip and a game: would prove a board opened by the frontend has the native reference's RAM"
+	report "arcade:keybinds" SKIP "same content: would prove the Arcade Panel's shipped bindings become the frontend's"
 fi
 
 # --- the bindings the package ships must become the frontend's defaults ---
@@ -200,5 +208,5 @@ else
 fi
 
 echo
-echo "$ok ok, $failed failed"
+echo "$ok ok, $failed failed, $skipped skipped"
 [ "$failed" -eq 0 ]

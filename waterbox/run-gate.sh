@@ -40,9 +40,12 @@ turboDigests() { grep -E '^(frames|vsync|tailVideoHash|audioHash|audioFrames|lag
 
 ok=0
 failed=0
-# SKIP counts as neither: a check that does not apply to this program is not a
-# pass to brag about and not a failure to fix.
-report() { printf "%-30s %-6s %s\n" "$1" "$2" "$3"; case "$2" in PASS) ok=$((ok+1)) ;; SKIP) ;; *) failed=$((failed+1)) ;; esac; }
+skipped=0
+# SKIP is not a pass to brag about and not a failure to fix - but it IS counted
+# and printed. The summary used to say "41 ok, 0 failed" over a run with four
+# skipped legs in it, and the summary is the line a log tail and a person read.
+# A silent skip is how a leg gets to never run anywhere (docs/gates.md, A).
+report() { printf "%-30s %-6s %s\n" "$1" "$2" "$3"; case "$2" in PASS) ok=$((ok+1)) ;; SKIP) skipped=$((skipped+1)) ;; *) failed=$((failed+1)) ;; esac; }
 printf "%-30s %-6s %s\n" "Check" "Result" "Detail"
 printf "%-30s %-6s %s\n" "-----" "------" "------"
 
@@ -271,13 +274,15 @@ print('R=%02x L=%02x' % ((w >> 16) & 0xff, (w >> 24) & 0xff))
 		report "input:lag" FAIL "pad=$lag_pad counter=$lag_cnt (want 0 and 30)"
 	fi
 
-	# Every domain must be present, non-empty and hashed. VRAM and sound RAM
-	# matter to a movie's watch window as much as system RAM does.
-	doms="$("$nat/run-native" "$wd" --frames 5 2>/dev/null | grep -c '^domain\[')"
-	if [ "$doms" = "4" ]; then
-		report "domains" PASS "System RAM, VRAM, Sound RAM and Flash exposed"
+	# Every domain must be present and hashed, BY NAME. A movie's watch window
+	# is keyed by the name, so counting four of them passes a core that dropped
+	# Sound RAM and added something else, and passes one that renamed a domain
+	# out from under every watch a project has saved.
+	doms="$("$nat/run-native" "$wd" --frames 5 2>/dev/null | sed -n 's/^domain\[\(.*\)\]=.*/\1/p' | tr '\n' ',')"
+	if [ "$doms" = "System RAM,VRAM,Sound RAM,Flash," ]; then
+		report "domains" PASS "System RAM, VRAM, Sound RAM and Flash exposed, under those names and in that order"
 	else
-		report "domains" FAIL "$doms domains, want 4"
+		report "domains" FAIL "the domains are [${doms%,}], want System RAM, VRAM, Sound RAM, Flash"
 	fi
 fi
 
@@ -852,11 +857,19 @@ panel=3200 arcade_legs "atomiswave" "atomiswave" "awbios.zip" "${FLYCAST_AW_ROMS
 # has C and Z but no analog at all; a twin stick has the second d-pad and no
 # analog; the PantherDC has everything including a second stick; a mouse and a
 # gun are not controllers and have neither a d-pad nor a trigger.
-chimera_root="${CHIMERA_ROOT:-$root/../../..}"
+# CHIMERA_ROOT, or a checkout where one actually is. The default used to be
+# $root/../../.., which on every layout this repository is ever cloned into is
+# some ancestor with no Chimera in it - /home, on the machine this was written
+# on. So the leg SKIPped everywhere and had never once executed, which is how
+# it came to be sitting on a real defect (see the trigger neutrals below).
+chimera_root="${CHIMERA_ROOT:-}"
+[ -n "$chimera_root" ] || for c in "$root/chimera-checkout" "$root/../../chimera" "$root/../chimera" "$HOME/chimera"; do
+	[ -x "$c/build/meson-linux/chimera-run" ] && { chimera_root="$c"; break; }
+done
 crun="$chimera_root/build/meson-linux/chimera-run"
 cpkg="$chimera_root/build/Cores/flycast.chimeraCore"
-if [ ! -x "$crun" ] || [ ! -f "$cpkg" ]; then
-	report "ports:columns" SKIP "needs chimera-run and a built package (set CHIMERA_ROOT)"
+if [ -z "$chimera_root" ] || [ ! -x "$crun" ] || [ ! -f "$cpkg" ]; then
+	report "ports:columns" SKIP "needs chimera-run and a built flycast.chimeraCore (set CHIMERA_ROOT; looked in $root/chimera-checkout, $root/../../chimera, $HOME/chimera)"
 else
 	printf '[Input]\nLogKey:#\n' > "$work/none.txt"
 	wrong=""
@@ -866,20 +879,28 @@ else
 			&& head -1 "$work/shape.txt")"
 		[ "$got" = "$2" ] || wrong="$wrong; $3 gave [${got:-nothing}] want [$2]"
 	}
+	# The AXIS VALUES are each axis's declared neutral, not zero. A Dreamcast's
+	# L and R are analog and waterbox.config declares their neutral as -32768,
+	# because a released trigger is the bottom of its range and not the middle
+	# of it - which is the same fact input:triggers checks from the machine's
+	# side ("released, the machine reads R=00 L=00"). The stick's two axes are
+	# centred and so are 0. Every line below that carries a trigger says
+	# -32768; the ones that do not (an arcade stick, a twin stick, a mouse, a
+	# gun) have no trigger to release.
 	check '{}' \
-		'||    0,    0,    0,    0,.........|' "a retail pad: a stick, two triggers, nine buttons"
+		'||    0,    0,-32768,-32768,.........|' "a retail pad: a stick, two triggers, nine buttons"
 	check '{"port1":"arcadeStick"}' \
 		'||...........|' "an arcade stick: C and Z, and no analog anywhere"
 	check '{"port1":"twinStick"}' \
 		'||..............|' "a twin stick: a second d-pad, and no analog"
 	check '{"port1":"xl"}' \
-		'||    0,    0,    0,    0,    0,    0,................|' "a PantherDC: every button and a second stick"
+		'||    0,    0,-32768,-32768,    0,    0,................|' "a PantherDC: every button and a second stick"
 	check '{"port1":"mouse"}' \
 		'||    0,    0,    0,...|' "a mouse: three buttons and three relative axes"
 	check '{"port1":"lightGun"}' \
 		'||    0,    0,........|' "a gun: a screen position, a trigger and a reload"
 	check '{"port1":"gamepad","port2":"gamepad"}' \
-		'||    0,    0,    0,    0,.........|    0,    0,    0,    0,.........|' "two pads"
+		'||    0,    0,-32768,-32768,.........|    0,    0,-32768,-32768,.........|' "two pads"
 	check '{"port1":"none"}' \
 		'||' "nothing plugged in anywhere"
 	if [ -z "$wrong" ]; then
@@ -890,5 +911,5 @@ else
 fi
 
 echo
-echo "$ok ok, $failed failed"
+echo "$ok ok, $failed failed, $skipped skipped"
 [ "$failed" -eq 0 ]
