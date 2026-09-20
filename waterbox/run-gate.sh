@@ -203,6 +203,49 @@ PYSTEADY
 	fi
 done
 
+# ---- is the machine going anywhere at all? ---------------------------------
+# A game that STOPS is not a game that DIED, and nothing else in this gate can
+# tell the difference. A stuck machine is perfectly deterministic: it matches
+# itself run to run, native matches waterboxed, a savestate round-trips
+# losslessly, no guest dies and no leg goes red. Flycast under cpu=jit sat on
+# the SEGA splash screen of a real disc on one host while advancing normally on
+# the other, and every check in this file was green on both (chimera
+# docs/gates.md, D - asserting only the state the thing is in, never the state
+# where it is wrong).
+#
+# So: ask whether the machine is still reaching states it has not been in.
+# --machine-trace hashes every memory domain once a frame; counter.elf counts
+# into RAM every frame, so a live machine must produce a DIFFERENT digest on
+# every one of them.
+#
+# The leg carries its own negative control rather than a comment promising one
+# was done. smc.elf ends in `bra done`, a loop that writes nothing, so its
+# machine is genuinely stopped after the first frames - and the same check run
+# against it must come out at 1. If both programs answered alike the check
+# would be measuring nothing, and the leg says so instead of passing.
+progdir="$work/progress"
+mkdir -p "$progdir"
+if ! cp "$root/tests/roms/counter.elf" "$root/tests/roms/smc.elf" "$progdir/" 2>/dev/null; then
+	report "progress:machine" FAIL "no counter.elf or smc.elf (run tests/make-testprog.py tests/roms)"
+else
+	printf '{}' > "$progdir/settings"
+	distinct() { # <program> -> how many distinct machine states in 60 frames
+		printf '{"disc":["%s"]}' "$1" > "$progdir/slots"
+		rm -f "$work/prog.mt"
+		"$nat/run-native" "$progdir" --frames 60 --machine-trace "$work/prog.mt" >/dev/null 2>&1 || { echo 0; return; }
+		awk '{print $2}' "$work/prog.mt" | sort -u | wc -l
+	}
+	moving="$(distinct counter.elf)"
+	stopped="$(distinct smc.elf)"
+	if [ "$stopped" != "1" ]; then
+		report "progress:machine" FAIL "the control is wrong: smc.elf should stop dead and reached $stopped states, so this check proves nothing"
+	elif [ "$moving" = "60" ]; then
+		report "progress:machine" PASS "60 frames, 60 machine states; the stopped control reached 1"
+	else
+		report "progress:machine" FAIL "counter.elf reached only $moving distinct machine states in 60 frames - the machine stopped going anywhere"
+	fi
+fi
+
 # ---- the recompiler, and the one write nothing else sees --------------------
 # Every other leg in this gate runs the interpreter, because that is the `cpu`
 # default. This one runs the RECOMPILER, on the smallest program that can tell

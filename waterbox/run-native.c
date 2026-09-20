@@ -6,7 +6,7 @@
  * the rom under its real name, plus optional "slots" and "settings" JSON.
  *
  * usage: run-native <workdir> [--frames N] [--sol FILE] [--sys S] [--ctl1 T]
- *        [--ctl2 T] [--exercise] [--screenshot out.tga]
+ *        [--ctl2 T] [--exercise] [--screenshot out.tga] [--machine-trace F]
  */
 #include <stdint.h>
 #include <stdio.h>

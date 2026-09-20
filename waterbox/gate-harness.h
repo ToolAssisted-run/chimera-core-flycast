@@ -96,6 +96,15 @@ struct gate_opts
 	int turbo;            /* nonzero: draw nothing for the first half of the run */
 	long turboSettle;     /* frames to let the picture settle before hashing it */
 	const char *audioTracePath; /* optional: one line per frame, "<frame> <sample pairs>" */
+	/* optional: one line per frame, "<frame> <machine digest> <video hash>".
+	 * The machine digest is every memory domain hashed together, so two runs
+	 * can be diffed to the frame they first disagree - and a run can be asked
+	 * whether the machine is still GOING ANYWHERE, which a stuck game is not
+	 * and every other check in this gate is happy with (chimera docs/gates.md,
+	 * D: a stuck game is deterministic, survives a savestate and matches
+	 * itself). It hashes the whole machine every frame, so it is asked for
+	 * rather than always on. */
+	const char *machineTracePath;
 	int holdAxis;         /* axis to hold at holdValue for the whole run, or -1 */
 	int holdValue;
 };
@@ -300,6 +309,12 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 		audioTrace = fopen(o->audioTracePath, "w");
 		if (!audioTrace) { perror(o->audioTracePath); return 1; }
 	}
+	FILE *machineTrace = NULL;
+	if (o->machineTracePath)
+	{
+		machineTrace = fopen(o->machineTracePath, "w");
+		if (!machineTrace) { perror(o->machineTracePath); return 1; }
+	}
 
 	for (long f = 0; f < frames; f++)
 	{
@@ -402,6 +417,14 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 		audioFrames += n;
 		if (audioTrace)
 			fprintf(audioTrace, "%ld %d\n", f, n);
+		if (machineTrace)
+		{
+			uint64_t mh = 0;
+			for (int di = 0; di < c->domain_count(); di++)
+				mh = gate_fnv(mh, c->domain_ptr(di), (size_t)c->domain_size(di));
+			fprintf(machineTrace, "%ld %016llx %016llx\n", f,
+				(unsigned long long)mh, (unsigned long long)gate_fnv(0, video, (size_t)w * h * 4));
+		}
 		if (!c->input_was_read())
 			lag++;
 		if (o->screenshotPath && f == frames - 1)
@@ -410,6 +433,8 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 
 	if (audioTrace)
 		fclose(audioTrace);
+	if (machineTrace)
+		fclose(machineTrace);
 
 	printf("frames=%ld\n", frames);
 	printf("vsync=%d/%d\n", c->vsync_numerator(), c->vsync_denominator());
@@ -483,6 +508,7 @@ static int gate_parse_opts(int argc, char **argv, int first, struct gate_opts *o
 	o->turbo = 0;
 	o->turboSettle = 0;
 	o->audioTracePath = NULL;
+	o->machineTracePath = NULL;
 	o->holdAxis = -1;
 	o->holdValue = 0;
 	for (int i = first; i < argc; i++)
@@ -532,6 +558,7 @@ static int gate_parse_opts(int argc, char **argv, int first, struct gate_opts *o
 		else if (!strcmp(argv[i], "--turbo")) o->turbo = 1;
 		else if (!strcmp(argv[i], "--turbo-settle") && i + 1 < argc) o->turboSettle = strtol(argv[++i], 0, 0);
 		else if (!strcmp(argv[i], "--audio-trace") && i + 1 < argc) o->audioTracePath = argv[++i];
+		else if (!strcmp(argv[i], "--machine-trace") && i + 1 < argc) o->machineTracePath = argv[++i];
 		else if (!strcmp(argv[i], "--hold-axis") && i + 2 < argc)
 		{
 			o->holdAxis = (int)strtol(argv[++i], 0, 0);
