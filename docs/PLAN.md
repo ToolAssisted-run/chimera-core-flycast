@@ -624,26 +624,68 @@ Chimera's firmware channel once the machine runs.
   and a counting loop never fill the code cache, never reset it, and never
   reach a state load.
 
-  **And the recompiler is not host-independent, which is a SEPARATE and still
-  open defect.** With the fix in, Prince of Persia runs 6,000 frames on Linux
-  and on Windows and the two agree on the picture, the audio, the audio frame
-  count, the lag count, VRAM, sound RAM and the flash - and disagree on System
-  RAM. At frame 2,000 the two hosts differ in 3,624 bytes across 429 scattered
-  ranges, the first at `0x8C00FA50`. They agree at 600. The interpreter run on
-  the same disc, the same frames and the same two hosts differs in ZERO bytes,
-  which is what says this belongs to the recompiler and not to the core, the
-  sandbox or the disc.
-  Nothing here explains it yet. What is known: the guest is the same ELF on
-  both hosts (it is built for Linux and musl either way), so the emitted code
-  and the register allocation cannot differ; and the machine plainly executed
-  the same instructions, or the picture and the sound would have moved too. The
-  candidates are therefore the host's answers - miniBox on Windows loses the
-  guest's %fs at any scheduler quantum and repairs it on the next fault or
-  boundary (see its own warning in any Windows run here), which is a silent
-  wrong read for any thread-local that does NOT fault.
-  Until this is understood `cpu=jit` cannot become the default and a movie
-  recorded under it does not travel between hosts. The interpreter, which every
-  other leg in this gate runs, is unaffected.
+  **And cpu=jit is not usable on Windows, for a reason that is not flycast's.**
+  Reported from the frontend: Prince of Persia sits on the SEGA splash screen
+  under jit and advances normally under the interpreter. It does not reproduce
+  in any headless path. Measured, all on the same disc and the same core:
+  - `run-wbx`, software renderer, 2,500 frames: the whole machine AND the
+    picture are byte-identical on Linux and Windows on every frame except for
+    28 bytes of system RAM from frame 1,550 (below), and the picture is
+    identical for all 2,500.
+  - `run-wbx`, the guest Mesa OpenGL renderer, 500 frames: identical.
+  - `chimera-run`, the packaged core, 1,000 frames: identical, and the
+    screenshots at frames 400 and 900 are identical files.
+  - `chimera-run --gpu`, the hardware OpenGL renderer on the real GPU, 500
+    frames: jit and the interpreter draw the same frame 400.
+  - jit and the interpreter make the same progress: 98 distinct pictures each
+    over 1,000 frames of that disc.
+
+  **What DOES reproduce it is the greenzone**, which every one of those runs had
+  switched off and the frontend always has on. `chimera-run --greenzone-bytes`:
+
+  | | greenzone off | greenzone on |
+  | --- | --- | --- |
+  | Linux, jit | A | A, identical at frames 400 and 900 |
+  | Windows, jit | A, same as Linux | **B, different at 400 and at 900** |
+  | Windows, interpreter | C | C, identical |
+
+  So the machine that changes is Windows + jit + the greenzone, and nothing
+  else. The interpreter on the same host with the same history is untouched,
+  and 3,000 frames of it are byte-identical between hosts. The wrong machine is
+  DETERMINISTIC - two Windows runs of it produce the same frame 400 to the byte
+  - so it is a systematic difference rather than a race, and whoever picks it
+  up will get it on the first try.
+
+  **This is miniBox's, not this core's.** The one thing `cpu=jit` has that
+  nothing else here does is an 11 MB RWX region inside the guest image - the
+  recompiler's code cache, `DECLARE_CODE_CACHE(SH4_TCB)` in `.text`, made
+  writable by `waterbox/stubs/vmem-stub.cpp`. The greenzone holds a clean page
+  read-only and waits for the write to fault (`mb_page_native_prot`: a clean
+  `MB_ST_RWX` page is held at `MB_PROT_RX`, which on Windows is
+  `PAGE_EXECUTE_READ`), and that hold is the only thing switching the greenzone
+  on turns on. A write to the code cache that the hold swallows leaves the
+  recompiler executing code it did not emit, which is exactly a game that
+  wanders off. Note also that `run-wbx --rerecord` - save and load around every
+  frame - does NOT reproduce it, which points at the EPOCH HOLD path rather
+  than at save/load.
+  It wants raising in miniBox rather than patched around here, and until it is,
+  `cpu=jit` is a Linux-only setting in practice.
+
+  **A smaller host difference, separately.** Under jit with the greenzone off,
+  Linux and Windows part at frame 1,550 in 28 bytes at `0x8C2B3AE2`: a fragment
+  of MPEG program-stream data read off the disc (`00 00 01 BA` pack header,
+  `00 00 01 E0` video PES), present on Linux and zero on Windows. The picture
+  is unaffected for the whole 2,500-frame run, so it is a savestate-identity
+  problem rather than a visible one, and it has not been explained.
+
+  **The %fs hypothesis is ruled down, not out.** miniBox warns on every Windows
+  run that the OS does not keep the guest's `%fs`. It cannot be a source of
+  SILENT wrong reads here: the guest's entire TLS block is 0x30 bytes and every
+  variable in it sits at a negative offset from the thread pointer, so a read
+  with `%fs` at 0 lands within 0x30 bytes of address zero and FAULTS, which
+  miniBox catches, repairs and retries. A silent wrong read would need a
+  valid-but-wrong base, and the base it loses to is 0. The bytes that actually
+  differ are disc data, which is not TLS-shaped.
 
   **The other hole in patch 0012 is still open**, and has no witness:
   `WriteMemBlock_nommu_sq` writes 32 bytes through a raw `GetMemPtr` for every
