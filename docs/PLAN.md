@@ -472,10 +472,13 @@ Chimera's firmware channel once the machine runs.
 - **Textures.** refsw decodes them (TexUtils.cpp is vendored and compiled), and
   nothing in the gate draws a textured polygon yet - the test program submits
   flat-shaded geometry. A real game is the test that matters here.
-- **The recompilers.** The SH4, the ARM7 and the AICA's DSP all interpret. A
-  JIT can live in a sandbox (PPSSPP's does), and it would be worth the work if
-  a real game turns out to be too slow to be playable, which is the open
-  question a real game would answer.
+- **The recompilers.** The ARM7 and the AICA's DSP interpret. The SH4 has both
+  and the `cpu` setting chooses; the recompiler is about four times faster and
+  is NOT the default, because it kills the machine on Prince of Persia about
+  seventy seconds in - see the 2026-09-20 log entry for what that is and, more
+  usefully, for the five things it is not. Nothing in the gate runs the
+  recompiler at all: every leg here is an interpreter leg, and a leg for jit
+  wants a subject that survives it (docs/gates.md, A and E).
 - **Speed.** A reference rasteriser and three interpreters is the slowest
   possible arrangement, and now that a frame is one video field the cost per
   frame is finally a comparable number: Street Fighter Zero 3's attract mode
@@ -506,6 +509,110 @@ Chimera's firmware channel once the machine runs.
   a game worth recording.
 
 ## Log
+
+- **2026-09-20** The SH4 recompiler: what `cpu=jit` actually does, and what it
+  does not. The setting has said since the machine ran that jit "on Windows
+  corrupts guest memory and takes the machine down after a couple of hundred
+  frames". That sentence was written when nothing was understood, and four of
+  its five claims are wrong. Measured, on Prince of Persia: The Sands of Time
+  (a disc, not in this repository) with no input at all from power-on:
+
+  - **Not Windows'.** Linux and Windows agree byte for byte - video, audio,
+    audio frame count, lag count and all four memory domains - at 600 frames,
+    and agree again at 6,000, by which point both have been dead for nearly
+    two thousand frames - the Windows death confirmed on its own by the new
+    check below, which stops the Windows runner before frame 4,500 with the
+    same words. (Windows was reached by
+    cross-building `run-wbx` with mingw-w64 against miniBox's Windows host DLL
+    and running the PE through WSL interop, from a copy under %TEMP%.)
+  - **Not the sandbox's.** `run-native` - the same sources compiled for this
+    machine, with no miniBox anywhere - dies identically: same exception code,
+    same `epc`, same `pr`, same sixteen general registers.
+  - **Not "a couple of hundred frames".** Bisected with the new death check
+    (below): 4,281 frames from power-on run clean and 4,296 do not, so it dies
+    somewhere in those fifteen - about seventy-two seconds of play. The place
+    is the same run to run, process to process and host to host: three separate
+    runs printed the same exception, the same `epc`, the same `pr` and the same
+    sixteen registers.
+  - **Not "corrupts guest memory"** in the sense of somebody writing where they
+    should not. The machine takes an SH4 ILLEGAL INSTRUCTION exception
+    (`evn=180`) at `0xAC000010` - the uncached window on system RAM offset 0x10,
+    inside the 64KB the HLE bios keeps for itself, and a healthy run at the
+    same frame has `ff ff ff ff ff ff ff ff` there - while `SR.BL` is set, which upstream treats as fatal
+    (`sh4_interrupts.cpp`, "Fatal: SH4 exception when blocked"). The SH4
+    BRANCHED somewhere it should not have; nothing overwrote anything.
+  - **Not every game.** Re-Volt and Street Fighter Zero 3 run 6,000 frames
+    under jit without a scratch. Only Prince of Persia is known to die.
+  - It **is** the recompiler: `cpu=interpreter` runs the identical 6,000 frames
+    of the identical disc and never notices.
+
+  **Not self-modifying code**, which was the first suspicion and the reason
+  patch 0012 exists. Upstream compiles a block that sits on an UNPROTECTED page
+  with a check on its own source bytes at entry (`CheckBlock`'s `force_checks`),
+  and relies on page protection for the rest. A build that forces that check on
+  for EVERY block ran the whole failing run with zero check failures: every
+  block the SH4 entered was compiled from the bytes that were still there.
+  Negative-controlled twice, because a check nobody has seen fail is not a check
+  (chimera docs/gates.md, B): poisoning the comparison made it fire 23 times in
+  5 frames, and deleting patch 0012's hook moved the machine's digest, so the
+  hook is load-bearing - it is simply not what is broken here.
+
+  **What the trace says.** A ring of the last 256 block entries, printed where
+  the exception is raised, ends: ... `8c04b880 8c04b888 8c04b892 8c04b8a2
+  8c056bb8 8c056bd6 8c056bdc 8c056be2 8c056ddc 8c04b8c6 8c04b8c8 8c04b920
+  8c04b952` and then `ac000010`. Ordinary game code throughout, `pr` and `r13`
+  both `8c15ab08` - an address that holds a pointer table, not code - and
+  `sr=700000f1`, which is MD/RB/BL set: the machine was already inside an
+  exception or interrupt prologue when it jumped into nothing.
+
+  **The same recompiler with a real address space does NOT die.** This core
+  gives the SH4 no address space at all: `waterbox/stubs/vmem-stub.cpp` refuses
+  `virtmem::init`, `addrspace::virtmemEnabled()` is false, and every memory
+  access the recompiler emits goes out through Flycast's software translation
+  (`MemHandlers[Slow]` tail-calling `addrspace::readN/writeN`). Upstream takes
+  that path only on a host that cannot reserve 512MB; on every desktop it takes
+  the other one, where the host MMU does the translation and a memory access is
+  one instruction.
+  Run the experiment: a native build with upstream's `core/linux/posix_vmem.cpp`
+  in place of the stub, `addrspace::reserve()` and `os_InstallFaultHandler()`
+  called before `emu.init()` (this core calls neither, because `flycast_init()`
+  is not what starts the machine here), the same disc, the same 6,000 frames,
+  the same recompiler. It finishes: no exception, a full set of digests, and
+  138 lag frames - which is the number a LIVE machine reports, against the 2,134
+  the software-translation run reported by counting every frame after the death
+  as a lag frame.
+  That is the strongest single thing known about this bug and it is not a clean
+  one-variable experiment: turning virtmem on changes the emitted code as well
+  as the address space (the fast memory handlers replace the slow ones), so
+  block sizes and therefore the per-block cycle accounting change with it. What
+  it does say is that the fault lives in the arrangement this core is obliged to
+  use and not in the recompiler as upstream runs it - which is also why upstream
+  has never had to find it.
+
+  **What would settle it**, in order of cost: run the recompiler with virtmem
+  ON but the SLOW memory handlers forced (`MemType::Fast` disabled), which
+  separates the address space from the emitted code; and instrument
+  `rdv_LinkBlock`/`bm_DiscardBlock` to name the block that handed control to
+  `0xAC000010`, which the block-entry ring says was `8c04b952`.
+
+  **Two holes in patch 0012 found on the way**, neither of them this bug (the
+  block checks above rule that out) but both real. The hook covers
+  `addrspace::writet` and `WriteMemBlock_nommu_dma`/`_ptr`; it does NOT cover
+  `WriteMemBlock_nommu_sq` (the SH4's store queues, 32 bytes at a time through
+  a raw `GetMemPtr`), nor `GenWriteMemImmediate` in `rec-x64/rec_x64.cpp`,
+  which for a store to a constant RAM address emits `mov [rax], reg` inline and
+  reaches memory without passing any hook at all - a JIT-only path, since the
+  interpreter never emits it, and one upstream never needs because the page
+  would fault. A game that writes code through either goes unnoticed.
+
+  **And the harness was lying.** `run-wbx` called `FrameAdvance` 20,000 times
+  into a machine that had died at 4,200 - a dead guest returns 0 from every
+  call and runs nothing (miniBox `wbx_get_death`) - then printed a full set of
+  digests as though the run had happened. That is docs/gates.md C exactly, and
+  every leg in this gate stands on that loop. It now asks after every frame and
+  stops with "the machine died: <why>" and exit 3. Proved by running it against
+  the disc that dies: before, `frames=20000` and a digest block; after, no
+  digests at all and exit 3.
 
 - **2026-09-19** Internal resolution and texture filtering, for the OpenGL
   renderers (chimera#102). Both are picture settings and the gate says so:
