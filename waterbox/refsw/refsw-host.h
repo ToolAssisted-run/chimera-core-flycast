@@ -89,21 +89,22 @@ union HALF_OFFSET_type {
  * it gets its own name. */
 #define detwiddle refsw_detwiddle
 
-/* CHIMERA: the palette a paletted texture is looked up in.
+/* CHIMERA: a paletted texture's palette is NOT unpacked here.
  *
- * refsw reads PALETTE_RAM - the PVR's palette registers - and hands the word
- * back as the texel. That is only a colour when the palette is in ARGB8888;
- * in the other three formats (PAL_RAM_CTRL says which) the word is a 16-bit
- * 1555, 565 or 4444 value, and handing it over as a 32-bit colour makes every
- * paletted texture nearly black. Flycast unpacks the palette for its own
- * renderers into palette32_ram, but in the GL byte order (red low), which is
- * not this core's. So the driver keeps its own, unpacked with refsw's own
- * macros - the ones that put blue in the low byte - and refsw reads that.
- * chimera_refsw_palette is filled once per frame in waterbox/refsw-renderer.cpp.
+ * It is tempting to think it should be. refsw reads PALETTE_RAM - the PVR's
+ * palette registers - and hands the word straight back as the texel, and in
+ * three of the four palette formats that word is a 16-bit 1555, 565 or 4444
+ * value, not a colour. But the word does not go to the screen: TextureFetch
+ * passes it through ExpandToARGB8888 with GetExpandFormat, which for a
+ * paletted texture is PAL_RAM_CTRL & 3 - the very format the palette is in.
+ * The expansion is already there, once, in the right place.
+ *
+ * Unpacking the palette a second time on the way in was tried (a04d384) and
+ * is what Street Fighter Zero 3's sprites caught: expanded twice, Dan's white
+ * gi came out magenta. tests/refsw/test-texfmt.cpp now decodes a paletted
+ * texel end to end and checks the colour is the palette entry expanded ONCE,
+ * so the mistake cannot be made again without the gate saying so.
  */
-extern u32 chimera_refsw_palette[1024];
-#undef PALETTE_RAM
-#define PALETTE_RAM chimera_refsw_palette
 
 /* libswirl's structured logging. A core has a frontend to talk to, not a
  * console, and a rasteriser that logs every tile is a rasteriser nobody can

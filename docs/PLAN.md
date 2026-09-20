@@ -242,19 +242,32 @@ Chimera's firmware channel once the machine runs.
   MACROS whose argument is not parenthesised, so `ARGB4444_32(0xF000 | (15 << 8))`
   shifts the wrong half of the expression and reads an opaque texel as
   transparent. Put the word in a variable first.
-- **A paletted texture was looked up in the PVR's registers, not in a
-  palette** (same day). refsw returned `PALETTE_RAM[idx]` - the palette
-  REGISTER - as the texel, which is a colour only when the game loaded its
-  palette in ARGB8888; in the other three formats (`PAL_RAM_CTRL` says which)
-  the register holds a 16-bit 1555/565/4444 value and every paletted texture
-  came out nearly black. Flycast unpacks the palette for its own renderers
-  into `palette32_ram`, but in the GL order (red low), which is not this
-  core's. So the driver keeps its own - `chimera_refsw_palette`, rebuilt once
-  per frame in `refsw-renderer.cpp` with refsw's own macros - and
-  `refsw/refsw-host.h` points refsw at it. No disc here exercises it (Re-Volt,
-  Unreal Tournament and Prince of Persia use no paletted textures at all, and
-  `PAL_RAM_CTRL` stays 0), so it is fixed by construction and the decoder test
-  pins the order; a game of paletted sprites is what would prove it.
+- **A paletted texture was already right, and "fixing" it broke it**
+  (2026-09-19 broken, 2026-09-20 undone; chimera#105). The reasoning that
+  went in alongside the YUV fix was: refsw returns `PALETTE_RAM[idx]` - the
+  palette REGISTER - as the texel, and in three of the four palette formats
+  that register holds a 16-bit 1555/565/4444 word, not a colour; so the
+  driver unpacked the palette into `chimera_refsw_palette` each frame and
+  `refsw-host.h` pointed refsw at that. It was written when no disc here used
+  a paletted texture, so it shipped as "fixed by construction". It was wrong.
+  The word refsw hands back never goes to the screen as it stands:
+  `TextureFetch` passes it through `ExpandToARGB8888` with `GetExpandFormat`,
+  which for a paletted texture returns `PAL_RAM_CTRL & 3` - the expansion is
+  already there, once, in the right place. Unpacking on the way in expanded
+  it TWICE, and the second pass read the first pass's high bytes as
+  channels. Street Fighter Zero 3 (Tentou Taikenban, a 4-bit paletted sprite
+  game: `pal4` up to 12 polygons a frame, 985 of 1024 palette entries set,
+  `PAL_RAM_CTRL` 0) drew Dan's white gi as magenta and blue. With the
+  indirection removed the picture is byte-identical to the one before the
+  "fix" ever landed.
+  THE LESSON, and why the entry is kept rather than deleted: "fixed by
+  construction" is not fixed. Two plausible readings of the same code - the
+  raw word is a colour, the raw word is expanded later - cannot both be right,
+  and nothing but running it decides which. `tests/refsw/test-texfmt.cpp` now
+  walks the whole paletted path with no machine and no disc: it provides the
+  register file, eight megabytes of VRAM and one index, calls
+  `chimera_refsw_decode`, and checks the colour is the palette entry expanded
+  EXACTLY once. Against the broken build seven of its checks fail.
 
 - **A sandbox has `naomi.zip` and not `./naomi.zip`.** Flycast joins its data
   directory onto a file name with a separator between, and the data

@@ -60,8 +60,6 @@ static_assert(offsetof(Vertex, x) == 0, "Vertex.x");
 static_assert(offsetof(Vertex, col) == 12, "Vertex.col");
 static_assert(offsetof(Vertex, u) == 20, "Vertex.u");
 
-/* see refsw/refsw-host.h: refsw's palette, in this core's colour order */
-u32 chimera_refsw_palette[1024];
 
 namespace {
 
@@ -707,30 +705,8 @@ struct refswrend : Renderer
 			TransformNaomi2(ctx->rend);
 	}
 
-	/* The palette every paletted texture is looked up in, in THIS core's
-	 * colour order (blue in the low byte), rebuilt from the PVR's own palette
-	 * registers each frame. See waterbox/refsw/refsw-host.h for why refsw
-	 * cannot simply read those registers, and why Flycast's palette32_ram is
-	 * the wrong order for us. PAL_RAM_CTRL names the format the game loaded
-	 * the palette in; the macros are refsw's own, so a paletted texture and a
-	 * direct one agree about what a colour is. */
-	static void RebuildPalette()
-	{
-		const u32 *raw = &PvrReg(PALETTE_RAM_START_addr, u32);
-		switch (PAL_RAM_CTRL & 3)
-		{
-			case 0: for (int i = 0; i < 1024; i++) chimera_refsw_palette[i] = ARGB1555_32(raw[i]); break;
-			case 1: for (int i = 0; i < 1024; i++) chimera_refsw_palette[i] = ARGB565_32(raw[i]); break;
-			case 2: for (int i = 0; i < 1024; i++) chimera_refsw_palette[i] = ARGB4444_32(raw[i]); break;
-			/* ARGB8888: the word is already A,R,G,B from the top, which is
-			 * blue in the low byte - what everything else here produces. */
-			default: for (int i = 0; i < 1024; i++) chimera_refsw_palette[i] = raw[i]; break;
-		}
-	}
-
 	bool Render() override
 	{
-		RebuildPalette();
 		/* Turbo: nobody is going to look at this frame. Everything the SH4 can
 		 * see has already happened - the TA parsed the list in Process, and
 		 * this renderer never touches video memory (a render-to-texture pass,
