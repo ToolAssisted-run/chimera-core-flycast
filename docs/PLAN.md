@@ -526,10 +526,15 @@ Chimera's firmware channel once the machine runs.
   renderer needs the guest Mesa, so the native reference would draw 640x480
   whatever it was told.
 
-- **2026-09-19** Colours in the software renderer: the YUV packer and the
-  paletted lookup, both above. Re-Volt's picture is byte-identical before and
-  after (it uses neither format), which is what says the fix is confined to
-  what was wrong.
+- **2026-09-20** Colours in the software renderer, settled on real discs.
+  The YUV packer (above) is RIGHT and now proven: Donald Duck - Goin'
+  Quackers opens on a full-screen YUV movie (one textured quad a frame,
+  renders 19 to 1435), and frame 1500 is a warm orange scene with the fix and
+  a blue-cyan one without it - chimera#90's "a yellow sky turned blue", on a
+  disc. The paletted lookup (above) is the opposite: it was never broken and
+  the fix broke it, which Street Fighter Zero 3's sprites showed at once. Both
+  halves now have a machine-free leg in `test-texfmt` (20 checks), and
+  Re-Volt - which uses neither format - stays byte-identical throughout.
 
 - **2026-09-19** M6: the arcade boards. See the milestone for what shipped;
   the numbers: SFZ3 Upper 3600 frames in 148 s natively (interpreter, software
@@ -540,6 +545,29 @@ Chimera's firmware channel once the machine runs.
   GD-ROM cue/bin without its security-PIC zip (Shikigami no Shiro II), and a
   Dreamcast conversion of an Atomiswave game (Ranger Mission .chd) - the
   first needs `shikgam2.zip`, the second is a Dreamcast disc.
+
+- **2026-09-20** The three boards, on games, at last. Everything the arcade
+  work had to take on trust ran:
+  - **Atomiswave**: Dolphin Blue (`dolphin.zip` + `awbios.zip`) boots to its
+    attract mode in colour by frame 5400. First game the third board has ever
+    run. Its bios is slower than the NAOMI's - still on its own logo at 600
+    frames, 2% lit - and does not read the panel switches until around 2000,
+    so the gate's Test leg gets 3200 frames for this board instead of the
+    600 the others need. That is the whole reason `arcade_legs` takes a panel
+    frame count.
+  - **GD-ROM, and rotation**: Ikaruga (`ikaruga.zip`, 16 KB of security PIC,
+    plus `gdl-0010.chd` flat beside it) reaches its own brightness-adjustment
+    screen. The board reads `vertical 2` out of the game's header, writes
+    "EEPROM: vertical monitor orientation", and the readback comes out
+    480x640 the right way up. The flat disc lookup (patch 0016) is what makes
+    it work: Flycast first asks for `ikaruga/gdl-0010.chd`, a folder a
+    project does not have, and the fallback finds the disc beside the zip.
+  - **A clone resolves to its parent**: the merged set in hand carries
+    `epr-23524.ic22`, which belongs to `deathcoxo`, not to `deathcox` (whose
+    own rom is `dcox_us.ic22`). Named `deathcox.zip` nothing boots; named
+    `deathcoxo.zip` Death Crimson OX reaches "PRESS START BUTTON / FREE PLAY".
+    A merged zip is named for the SET inside it, not for the parent.
+  - Gate with all three folders set: see the milestone line below.
 
 - **2026-09-11** The software renderer is the default. Asked for: the hardware
   path has been unstable in use, and a Dreamcast does not need it. skmp's

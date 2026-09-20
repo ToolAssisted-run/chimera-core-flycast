@@ -764,6 +764,10 @@ arcade_legs() {
 	local wd="$work/$tag"
 	mkdir -p "$wd"
 	cp "$dir/$bios" "$dir/$game" "$wd/"
+	# A GD-ROM set is a tiny zip holding the board's key and a disc image
+	# beside it, so the disc travels with the zip: every image in the folder
+	# is copied flat, which is where a project mounts it.
+	cp "$dir"/*.chd "$dir"/*.gdi "$dir"/*.cue "$dir"/*.iso "$wd/" 2>/dev/null
 	printf '{"romset":["%s"]}' "$game" > "$wd/slots"
 	printf '{"machine":"%s"}' "$machine" > "$wd/settings"
 	local frames=${FLYCAST_ARCADE_FRAMES:-600}
@@ -786,17 +790,25 @@ arcade_legs() {
 			report "$tag:savestate" FAIL "$(diff "$work/box.txt" "$work/rr.txt" | tr '\n' ' ' | head -c 120)"
 		fi
 		# the panel: Test (P1 wire 15) held for five frames three quarters of the
-		# way in (the bios polls nothing for its first 300) opens the system menu
-		# on any of these boards, so the machine must differ
-		local held boxheld
-		held="$("$nat/run-native" "$wd" --frames "$frames" --press $((frames * 3 / 4)):5:15 2>/dev/null | digests)"
-		boxheld="$("$nat/run-wbx" "$gst/core.wbx" "$wd" --frames "$frames" --press $((frames * 3 / 4)):5:15 2>/dev/null | digests)"
-		if [ "$held" = "$(cat "$work/nat.txt")" ]; then
+		# way in opens the system menu, so the machine must differ. A board only
+		# reads its panel once its bios is up, and the three do not take the same
+		# time to get there: the NAOMI polls within its first few hundred frames,
+		# the Atomiswave's bios is still on its own logo at 600 and first reads
+		# the switches around 2000, so that board is given the frames to reach
+		# them rather than being asked a question it cannot yet answer.
+		local panelFrames="${panel:-$frames}" held boxheld idle
+		idle="$(cat "$work/nat.txt")"
+		if [ "$panelFrames" != "$frames" ]; then
+			idle="$("$nat/run-native" "$wd" --frames "$panelFrames" 2>/dev/null | digests)"
+		fi
+		held="$("$nat/run-native" "$wd" --frames "$panelFrames" --press $((panelFrames * 3 / 4)):5:15 2>/dev/null | digests)"
+		boxheld="$("$nat/run-wbx" "$gst/core.wbx" "$wd" --frames "$panelFrames" --press $((panelFrames * 3 / 4)):5:15 2>/dev/null | digests)"
+		if [ "$held" = "$idle" ]; then
 			report "$tag:panel" FAIL "the Test button made no difference to the machine"
 		elif [ "$held" != "$boxheld" ]; then
 			report "$tag:panel" FAIL "native and sandbox disagree with Test held"
 		else
-			report "$tag:panel" PASS "the JVS board read the panel: idle != Test held, native == waterboxed"
+			report "$tag:panel" PASS "the JVS board read the panel at frame $((panelFrames * 3 / 4)): idle != Test held, native == waterboxed"
 		fi
 		if ls "$wd"/*.eeprom "$wd"/*.nvmem >/dev/null 2>&1; then
 			report "$tag:nvram" FAIL "the run left an EEPROM or NVRAM file behind: a later run would read it"
@@ -823,9 +835,9 @@ PYLIT
 		report "$tag:equivalence" FAIL "$(diff "$work/nat.txt" "$work/box.txt" | tr '\n' ' ' | head -c 120)"
 	fi
 }
-arcade_legs "naomi" "naomi" "naomi.zip" "${FLYCAST_ARCADE_ROMS:-}"
-arcade_legs "naomi2" "naomi2" "naomi2.zip" "${FLYCAST_NAOMI2_ROMS:-}"
-arcade_legs "atomiswave" "atomiswave" "awbios.zip" "${FLYCAST_AW_ROMS:-}"
+panel="" arcade_legs "naomi" "naomi" "naomi.zip" "${FLYCAST_ARCADE_ROMS:-}"
+panel="" arcade_legs "naomi2" "naomi2" "naomi2.zip" "${FLYCAST_NAOMI2_ROMS:-}"
+panel=3200 arcade_legs "atomiswave" "atomiswave" "awbios.zip" "${FLYCAST_AW_ROMS:-}"
 
 # ---- what a project PLUGS IN decides what a movie has columns for ----------
 # This package declares the union of every device its four ports can hold -
