@@ -1,0 +1,50 @@
+diff --git a/core/rec-x64/rec_x64.cpp b/core/rec-x64/rec_x64.cpp
+index b78ffc9..2949eca 100644
+--- a/core/rec-x64/rec_x64.cpp
++++ b/core/rec-x64/rec_x64.cpp
+@@ -970,6 +970,45 @@ private:
+ 
+ 	bool GenWriteMemImmediate(const shil_opcode& op, RuntimeBlockInfo* block)
+ 	{
++		// chimera: the other half of patch 0012.
++		//
++		// A store whose ADDRESS is a compile-time constant - `mova @(x,pc),r0`
++		// then `mov.l rN,@r0`, which is how an SH4 program writes a variable
++		// that lives beside its own code - is emitted here as a bare
++		// `mov [imm], reg`. It is the one write in this recompiler that reaches
++		// guest memory without passing addrspace::writet, and therefore the one
++		// write patch 0012's hook never hears about. Upstream does not need to
++		// hear about it: the page is write-protected, the store faults, and
++		// bm_RamWriteAccess discards the blocks compiled from that page. A
++		// sandbox can neither protect the page nor take the fault, so a block
++		// compiled from a page this store writes is never discarded, and goes
++		// on being re-entered.
++		//
++		// tests/roms/smc.elf is that case in eight instructions: with this
++		// optimisation left in, the machine answers 1 twice where it should
++		// answer 1 then 2. On Prince of Persia - The Sands of Time it is fatal.
++		// The machine drifts from frame 1,422 and dies on frame 4,283.
++		//
++		// Refusing sends the store through the memory handlers instead, which
++		// end in writet, which tells the block manager. Three arrangements were
++		// measured against each other on that disc and all three produce the
++		// SAME machine to the byte over 6,000 frames: this refusal, the same
++		// recompiler given a real address space (where the fault does the
++		// telling), and keeping the inline store while emitting a call to
++		// bm_RamWriteAccess after it.
++		//
++		// This one is the cheapest. Refusing costs nothing measurable (1,500
++		// frames of that disc: 48.72s against 48.79s, which is noise); emitting
++		// the guarded call costs 4.4% (46.94s against 49.01s), because it pays
++		// two instructions on every immediate store to save a handler call the
++		// machine was making anyway.
++		//
++		// Reads are left alone. GenReadMemImmediate bakes a POINTER and
++		// dereferences it every time, so it is never stale, and a build with
++		// only the read path refused dies exactly as it did before.
++#ifdef CHIMERA_NO_PAGE_PROTECTION
++		return false;
++#endif
+ 		if (!op.rs1.is_imm())
+ 			return false;
+ 		void *ptr;

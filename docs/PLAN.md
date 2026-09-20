@@ -473,12 +473,13 @@ Chimera's firmware channel once the machine runs.
   nothing in the gate draws a textured polygon yet - the test program submits
   flat-shaded geometry. A real game is the test that matters here.
 - **The recompilers.** The ARM7 and the AICA's DSP interpret. The SH4 has both
-  and the `cpu` setting chooses; the recompiler is about four times faster and
-  is NOT the default, because it kills the machine on Prince of Persia about
-  seventy seconds in - see the 2026-09-20 log entry for what that is and, more
-  usefully, for the five things it is not. Nothing in the gate runs the
-  recompiler at all: every leg here is an interpreter leg, and a leg for jit
-  wants a subject that survives it (docs/gates.md, A and E).
+  and the `cpu` setting chooses. The recompiler's own fault is fixed (patch
+  0017, 2026-09-20) and two legs now run it, but it is still not the default:
+  the two are different machines, so moving the default re-records every movie,
+  and that is a decision rather than a fix. What would support the decision is
+  a measurement nobody has made - how much faster jit actually is across a
+  range of discs. On Prince of Persia it is 1.3x, not the 4x this setting's
+  description used to claim.
 - **Speed.** A reference rasteriser and three interpreters is the slowest
   possible arrangement, and now that a frame is one video field the cost per
   frame is finally a comparable number: Street Fighter Zero 3's attract mode
@@ -528,34 +529,45 @@ Chimera's firmware channel once the machine runs.
   - **Not the sandbox's.** `run-native` - the same sources compiled for this
     machine, with no miniBox anywhere - dies identically: same exception code,
     same `epc`, same `pr`, same sixteen general registers.
-  - **Not "a couple of hundred frames".** Bisected with the new death check
-    (below): 4,281 frames from power-on run clean and 4,296 do not, so it dies
-    somewhere in those fifteen - about seventy-two seconds of play. The place
-    is the same run to run, process to process and host to host: three separate
-    runs printed the same exception, the same `epc`, the same `pr` and the same
+  - **Not "a couple of hundred frames".** Bisected to the frame with the new
+    death check (below): 4,282 frames from power-on run clean and 4,283 does
+    not. That is 71.5 seconds of play at 59.94 fields a second. The place is
+    the same run to run, process to process and host to host: separate runs
+    printed the same exception, the same `epc`, the same `pr` and the same
     sixteen registers.
-  - **Not "corrupts guest memory"** in the sense of somebody writing where they
-    should not. The machine takes an SH4 ILLEGAL INSTRUCTION exception
-    (`evn=180`) at `0xAC000010` - the uncached window on system RAM offset 0x10,
-    inside the 64KB the HLE bios keeps for itself, and a healthy run at the
-    same frame has `ff ff ff ff ff ff ff ff` there - while `SR.BL` is set, which upstream treats as fatal
-    (`sh4_interrupts.cpp`, "Fatal: SH4 exception when blocked"). The SH4
-    BRANCHED somewhere it should not have; nothing overwrote anything.
+  - **Not "corrupts guest memory"** in the sense of a wild write. The machine
+    takes an SH4 ILLEGAL INSTRUCTION exception (`evn=180`) at `0xAC000010` -
+    the uncached window on system RAM offset 0x10, inside the 64KB the HLE bios
+    keeps for itself, and a healthy run at the same frame has
+    `ff ff ff ff ff ff ff ff` there - while `SR.BL` is set, which upstream
+    treats as fatal (`sh4_interrupts.cpp`, "Fatal: SH4 exception when
+    blocked"). Twelve bytes of RAM are wrong by then and one of them matters,
+    but the fatal act is a BRANCH: the game's exception handler `rts`es to a
+    return address it popped four bytes off, lands in a pointer table, takes an
+    illegal instruction, and its handler's own exit jumps to a bios routine
+    reios does not implement. Nothing scribbled over anything.
   - **Not every game.** Re-Volt and Street Fighter Zero 3 run 6,000 frames
     under jit without a scratch. Only Prince of Persia is known to die.
   - It **is** the recompiler: `cpu=interpreter` runs the identical 6,000 frames
     of the identical disc and never notices.
 
-  **Not self-modifying code**, which was the first suspicion and the reason
-  patch 0012 exists. Upstream compiles a block that sits on an UNPROTECTED page
-  with a check on its own source bytes at entry (`CheckBlock`'s `force_checks`),
+  **Not code the game rewrote UNDER ITSELF** - which was the first suspicion,
+  and the reason patch 0012 exists, and it sent the investigation the wrong way
+  for an afternoon. Upstream compiles a block that sits on an unprotected page
+  with a check on its own source bytes at entry (`CheckBlock`'s `force_checks`)
   and relies on page protection for the rest. A build that forces that check on
-  for EVERY block ran the whole failing run with zero check failures: every
+  for EVERY block ran the whole failing run with ZERO check failures: every
   block the SH4 entered was compiled from the bytes that were still there.
   Negative-controlled twice, because a check nobody has seen fail is not a check
   (chimera docs/gates.md, B): poisoning the comparison made it fire 23 times in
   5 frames, and deleting patch 0012's hook moved the machine's digest, so the
-  hook is load-bearing - it is simply not what is broken here.
+  hook is load-bearing.
+  The reading that survives all of that is narrower and is what the cause turned
+  out to be: the bytes that change are DATA sitting on a page that also holds
+  code, so no block's own instructions ever differ and the source check is
+  blind to it by construction. What upstream relies on there is not the check;
+  it is the page being protected at PAGE granularity, so that writing the data
+  discards the code.
 
   **What the trace says.** A ring of the last 256 block entries, printed where
   the exception is raised, ends: ... `8c04b880 8c04b888 8c04b892 8c04b8a2
@@ -565,45 +577,80 @@ Chimera's firmware channel once the machine runs.
   `sr=700000f1`, which is MD/RB/BL set: the machine was already inside an
   exception or interrupt prologue when it jumped into nothing.
 
-  **The same recompiler with a real address space does NOT die.** This core
-  gives the SH4 no address space at all: `waterbox/stubs/vmem-stub.cpp` refuses
-  `virtmem::init`, `addrspace::virtmemEnabled()` is false, and every memory
-  access the recompiler emits goes out through Flycast's software translation
-  (`MemHandlers[Slow]` tail-calling `addrspace::readN/writeN`). Upstream takes
-  that path only on a host that cannot reserve 512MB; on every desktop it takes
-  the other one, where the host MMU does the translation and a memory access is
-  one instruction.
-  Run the experiment: a native build with upstream's `core/linux/posix_vmem.cpp`
-  in place of the stub, `addrspace::reserve()` and `os_InstallFaultHandler()`
-  called before `emu.init()` (this core calls neither, because `flycast_init()`
-  is not what starts the machine here), the same disc, the same 6,000 frames,
-  the same recompiler. It finishes: no exception, a full set of digests, and
-  138 lag frames - which is the number a LIVE machine reports, against the 2,134
-  the software-translation run reported by counting every frame after the death
-  as a lag frame.
-  That is the strongest single thing known about this bug and it is not a clean
-  one-variable experiment: turning virtmem on changes the emitted code as well
-  as the address space (the fast memory handlers replace the slow ones), so
-  block sizes and therefore the per-block cycle accounting change with it. What
-  it does say is that the fault lives in the arrangement this core is obliged to
-  use and not in the recompiler as upstream runs it - which is also why upstream
-  has never had to find it.
+  **The cause, and it is one store.** `rec-x64/rec_x64.cpp`'s
+  `GenWriteMemImmediate` emits a store whose ADDRESS is a compile-time constant
+  as a bare `mov [imm], reg`. It is the only write in that recompiler that
+  reaches guest memory without passing `addrspace::writet`, and therefore the
+  only one patch 0012's hook never hears about. Upstream does not need to hear
+  about it: the page is write-protected, the store faults, and
+  `bm_RamWriteAccess` discards the blocks compiled from that page. A sandbox can
+  neither protect the page nor take the fault, so a block compiled from a page
+  such a store writes is never discarded and goes on being re-entered.
+  The instruction that does it here is the SH4's `mova` - "put this label's
+  ADDRESS in r0" - followed by `mov.l r15,@r0`, at `0x8C04BDBA`: the game's
+  exception handler saving its stack pointer into a word that sits beside its
+  own code, in the same 4KB page. From then on the recompiler and the machine
+  disagree about that page.
 
-  **What would settle it**, in order of cost: run the recompiler with virtmem
-  ON but the SLOW memory handlers forced (`MemType::Fast` disabled), which
-  separates the address space from the emitted code; and instrument
-  `rdv_LinkBlock`/`bm_DiscardBlock` to name the block that handed control to
-  `0xAC000010`, which the block-entry ring says was `8c04b952`.
+  **Three ways to fix it, and all three produce the same machine to the byte.**
+  Measured over 6,000 frames of that disc, System RAM `0347c828ecdc0191` every
+  time: refuse the optimisation (the store goes through the handlers, which end
+  in writet, which tells the block manager); keep it and emit a call to
+  `bm_RamWriteAccess` after the store; or give the recompiler a real address
+  space (upstream's `posix_vmem` plus the `addrspace::reserve()` and fault
+  handler this core does not call), where the fault does the telling. The first
+  is what patch 0017 does, because it is also the cheapest: refusing costs
+  nothing measurable (1,500 frames: 48.72s against 48.79s), emitting the
+  guarded call costs 4.4% (46.94s against 49.01s).
 
-  **Two holes in patch 0012 found on the way**, neither of them this bug (the
-  block checks above rule that out) but both real. The hook covers
-  `addrspace::writet` and `WriteMemBlock_nommu_dma`/`_ptr`; it does NOT cover
-  `WriteMemBlock_nommu_sq` (the SH4's store queues, 32 bytes at a time through
-  a raw `GetMemPtr`), nor `GenWriteMemImmediate` in `rec-x64/rec_x64.cpp`,
-  which for a store to a constant RAM address emits `mov [rax], reg` inline and
-  reaches memory without passing any hook at all - a JIT-only path, since the
-  interpreter never emits it, and one upstream never needs because the page
-  would fault. A game that writes code through either goes unnoticed.
+  **How it was narrowed.** Disabling only the immediate WRITE path made the
+  machine survive; disabling only the immediate READ path did not (reads bake a
+  POINTER and dereference it every time, so they are never stale). With the
+  write path off, the per-frame whole-machine digest first differs from the
+  broken run at frame 1,422 - twelve bytes of System RAM, none of VRAM or sound
+  RAM - and those twelve bytes are a saved SH4 context whose T bit differs and
+  a saved stack pointer four bytes out. Two thousand eight hundred frames later
+  the handler pops that stack four bytes wrong, `rts` to a pointer table, and
+  the machine is gone.
+
+  **The gate now runs the recompiler.** `tests/roms/smc.elf` is the invariant in
+  eight instructions: call a subroutine that returns 1, overwrite it through a
+  `mova`'d constant address so it returns 2, call it again. Before patch 0017 the
+  recompiler answers 1 twice, natively and sandboxed; after it, 1 then 2, and
+  the interpreter answers 1 then 2 either way, which is the control that says
+  the program is right rather than merely unexercised. A second leg holds 300
+  recompiled frames of counter.elf to native == sandboxed. What the pair does
+  NOT stand in for is written beside it (docs/gates.md, E): eight instructions
+  and a counting loop never fill the code cache, never reset it, and never
+  reach a state load.
+
+  **And the recompiler is not host-independent, which is a SEPARATE and still
+  open defect.** With the fix in, Prince of Persia runs 6,000 frames on Linux
+  and on Windows and the two agree on the picture, the audio, the audio frame
+  count, the lag count, VRAM, sound RAM and the flash - and disagree on System
+  RAM. At frame 2,000 the two hosts differ in 3,624 bytes across 429 scattered
+  ranges, the first at `0x8C00FA50`. They agree at 600. The interpreter run on
+  the same disc, the same frames and the same two hosts differs in ZERO bytes,
+  which is what says this belongs to the recompiler and not to the core, the
+  sandbox or the disc.
+  Nothing here explains it yet. What is known: the guest is the same ELF on
+  both hosts (it is built for Linux and musl either way), so the emitted code
+  and the register allocation cannot differ; and the machine plainly executed
+  the same instructions, or the picture and the sound would have moved too. The
+  candidates are therefore the host's answers - miniBox on Windows loses the
+  guest's %fs at any scheduler quantum and repairs it on the next fault or
+  boundary (see its own warning in any Windows run here), which is a silent
+  wrong read for any thread-local that does NOT fault.
+  Until this is understood `cpu=jit` cannot become the default and a movie
+  recorded under it does not travel between hosts. The interpreter, which every
+  other leg in this gate runs, is unaffected.
+
+  **The other hole in patch 0012 is still open**, and has no witness:
+  `WriteMemBlock_nommu_sq` writes 32 bytes through a raw `GetMemPtr` for every
+  store-queue flush to system RAM, and tells the block manager nothing either.
+  It is the same defect and the same one-line shape of fix; what is missing is a
+  program or a disc that shows it, and shipping a fix nothing has been seen to
+  need is how docs/gates.md's last entry was written.
 
   **And the harness was lying.** `run-wbx` called `FrameAdvance` 20,000 times
   into a machine that had died at 4,200 - a dead guest returns 0 from every

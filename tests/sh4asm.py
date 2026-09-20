@@ -190,6 +190,17 @@ class Assembler:
             if disp % 4 or not 0 <= disp // 4 <= 15:
                 raise AsmError(f"mov.l disp out of range: {disp}")
             return 0x1000 | (_reg(inner[1]) << 8) | (_reg(args[0]) << 4) | (disp // 4)
+        if mnem == "mova":
+            # mova @(label,pc),r0 - the label's ADDRESS, not its contents, and
+            # a compile-time constant to a recompiler. That is what makes a
+            # store through it an immediate-address store (tests/roms/smc).
+            inner = args[0][2:-1].split(",")[0]
+            target = self.labels[inner] if inner in self.labels else int(inner, 0)
+            return 0xC700 | self._pcrel_disp(pc, target)
+        if mnem == "jsr":
+            return 0x400B | (_reg(args[0][1:]) << 8)
+        if mnem == "rts":
+            return 0x000B
         if mnem == "bra":
             return 0xA000 | self._branch_disp(pc, args[0], 12)
         if mnem == "bt":

@@ -321,10 +321,60 @@ done:   mov.l   #0x8C011000,r1
         nop
 """
 
+
+# Code the program rewrites, through the one store a recompiler turns into a
+# bare `mov [addr], reg`.
+#
+# A recompiler may only compile a piece of guest code once if it is told when
+# that code changes. Upstream Flycast is told by the host MMU: the page a block
+# came from is write-protected and the fault answers. A sandboxed guest has
+# neither, so patch 0012 makes the WRITE PATH say so instead - and the write
+# path is not the only way the recompiler reaches memory. `mova` puts a
+# constant address in r0, and a store through a constant address is emitted as
+# an inline `mov [imm], reg` (rec-x64's GenWriteMemImmediate) that passes no
+# hook at all. This program is that case, in eight instructions:
+#
+#   call `sub`, which returns 1, and record the answer;
+#   overwrite `sub` through a mova'd address so that it returns 2;
+#   call it again, and record THAT answer.
+#
+# A machine that noticed the write answers 1 then 2. One that did not answers 1
+# twice, because it re-runs the block it compiled the first time. The
+# interpreter has no blocks and always answers 1 then 2, which is what makes
+# this a test of the recompiler and of nothing else.
+SMC_ASM = PROLOGUE + """
+        mova    @(sub,pc),r0
+        mov     r0,r3
+        jsr     @r3
+        nop
+        mov.l   #0x8C011000,r4
+        mov.l   r0,@r4
+
+        mova    @(sub,pc),r0
+        mov.l   #0x000BE002,r2
+        mov.l   r2,@r0
+
+        mova    @(sub,pc),r0
+        mov     r0,r3
+        jsr     @r3
+        nop
+        mov.l   #0x8C011004,r4
+        mov.l   r0,@r4
+
+done:   bra     done
+        nop
+
+        nop
+sub:    mov     #1,r0
+        rts
+        nop
+"""
+
 PROGRAMS = {
     "counter.elf": COUNTER_ASM,
     "padread.elf": PADREAD_ASM,
     "triangle.elf": DRAW_ASM,
+    "smc.elf": SMC_ASM,
 }
 
 EM_SH = 42

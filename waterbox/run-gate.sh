@@ -203,6 +203,81 @@ PYSTEADY
 	fi
 done
 
+# ---- the recompiler, and the one write nothing else sees --------------------
+# Every other leg in this gate runs the interpreter, because that is the `cpu`
+# default. This one runs the RECOMPILER, on the smallest program that can tell
+# the two apart.
+#
+# smc.elf calls a subroutine that returns 1, overwrites it through a store to a
+# CONSTANT address so that it returns 2, and calls it again. The store is the
+# point: `mova` puts a constant in a register and rec-x64 emits the store that
+# follows as a bare `mov [imm], reg`, the one write in that recompiler that
+# reaches guest memory without passing the write path patch 0012 hooks. A
+# machine that was told answers 1 then 2. One that was not answers 1 twice,
+# because it re-enters the block it compiled before the overwrite.
+#
+# It goes red on the build that has the bug: before patch 0017 this leg reads
+# "1 then 1" under jit in both flavours, and it is the interpreter half that
+# says the program itself is right rather than merely unexercised.
+smcdir="$work/smc"
+mkdir -p "$smcdir"
+if ! cp "$root/tests/roms/smc.elf" "$smcdir/" 2>/dev/null; then
+	report "jit:selfModifyingCode" FAIL "no program smc.elf (run tests/make-testprog.py tests/roms)"
+else
+	printf '{"disc":["smc.elf"]}' > "$smcdir/slots"
+	smcread() { # <ram dump> -> "<first> <second>"
+		python3 - "$1" <<'PYSMC'
+import struct, sys
+d = open(sys.argv[1], 'rb').read()
+print(struct.unpack_from('<I', d, 0x11000)[0], struct.unpack_from('<I', d, 0x11004)[0])
+PYSMC
+	}
+	smcrun() { # <cpu> <runner...> -> answers, or empty on a runner error
+		printf '{"cpu":"%s"}' "$1" > "$smcdir/settings"
+		shift
+		rm -f "$work/smc.ram"
+		"$@" "$smcdir" --frames 10 --dump-domain "System RAM" "$work/smc.ram" >/dev/null 2>&1 || return 1
+		[ -f "$work/smc.ram" ] || return 1
+		smcread "$work/smc.ram"
+	}
+	natjit="$(smcrun jit "$nat/run-native")"
+	boxjit="$(smcrun jit "$nat/run-wbx" "$gst/core.wbx")"
+	natint="$(smcrun interpreter "$nat/run-native")"
+	if [ "$natint" != "1 2" ]; then
+		report "jit:selfModifyingCode" FAIL "the interpreter answered '$natint', so the PROGRAM is wrong, not the recompiler"
+	elif [ "$natjit" = "1 2" ] && [ "$boxjit" = "1 2" ]; then
+		report "jit:selfModifyingCode" PASS "code rewritten through a constant address is noticed, native and waterboxed"
+	else
+		report "jit:selfModifyingCode" FAIL "jit answered native '$natjit', waterboxed '$boxjit'; wanted '1 2' (a stale block returns 1 twice)"
+	fi
+fi
+
+{
+	# And the recompiler must be the same machine in both flavours, on a
+	# program that does hundreds of millions of instructions rather than eight.
+	jitdir="$work/jitcounter"
+	mkdir -p "$jitdir"
+	cp "$root/tests/roms/counter.elf" "$jitdir/"
+	printf '{"disc":["counter.elf"]}' > "$jitdir/slots"
+	printf '{"cpu":"jit"}' > "$jitdir/settings"
+	if ! "$nat/run-native" "$jitdir" --frames 300 2>/dev/null | digests > "$work/jit.nat.txt"; then
+		report "jit:equivalence" FAIL "native runner error under cpu=jit"
+	elif ! "$nat/run-wbx" "$gst/core.wbx" "$jitdir" --frames 300 2>/dev/null | digests > "$work/jit.box.txt"; then
+		report "jit:equivalence" FAIL "waterbox runner error under cpu=jit"
+	elif cmp -s "$work/jit.nat.txt" "$work/jit.box.txt"; then
+		report "jit:equivalence" PASS "300 recompiled frames, native == waterboxed"
+	else
+		report "jit:equivalence" FAIL "$(diff "$work/jit.nat.txt" "$work/jit.box.txt" | tr '\n' ' ' | head -c 120)"
+	fi
+
+	# WHAT THIS PAIR DOES NOT STAND IN FOR (chimera docs/gates.md, E). Eight
+	# instructions and a counting loop are not a game: they never fill the code
+	# cache, never reset it, never run the AICA's own recompiler, and never
+	# reach the state-load paths. The recompiler's fault of 2026-09-20 was found
+	# on a disc and bisected to one frame there; what this leg witnesses is the
+	# INVARIANT that fault broke, not the game that broke it.
+}
+
 # ---- input, through the maple bus -----------------------------------------
 # padread.elf builds a maple frame, starts the DMA and sums the controller's
 # answer into RAM every iteration, so a different input schedule MUST leave a
