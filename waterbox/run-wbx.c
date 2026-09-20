@@ -85,7 +85,33 @@ static int core_init_done(void) { return 1; } /* boot happens before Seal, not i
 static const char *core_load_error(void) { return (const char *)g_GetLoadError(); }
 static void core_set_button(int32_t i, int32_t s) { g_SetButton(i, s); }
 static void core_set_axis(int32_t i, int32_t v) { g_SetAxis(i, v); }
-static void core_frame(void) { g_FrameAdvance(0); }
+/* A frame, and then: is the machine still alive?
+ *
+ * A guest that aborts does not take the host with it - miniBox catches it,
+ * hands control back, and from then on EVERY call into the guest returns 0 and
+ * runs nothing (minibox.h, wbx_get_death). Without asking, this runner goes on
+ * calling FrameAdvance into the void and hashing whatever the domains last
+ * held, then prints a full set of digests as if the run had happened. It did
+ * that for 20,000 frames over a Dreamcast that had died at about 4,200
+ * (Prince of Persia with cpu=jit): a dead machine wearing the costume of a
+ * finished run, which is exactly docs/gates.md C - absent indistinguishable
+ * from failed. Every leg in the gate rests on this loop, so the question is
+ * asked on every frame and the answer ends the run.
+ *
+ * Exit 3, not 1: a runner that could not start is a different thing from a
+ * machine that stopped in the middle, and the gate prints what it is told. */
+static void core_frame(void)
+{
+	g_FrameAdvance(0);
+	char why[1024];
+	mb_return r;
+	wbx_get_death(g_host, why, sizeof why, &r);
+	if (r.data)
+	{
+		fprintf(stderr, "the machine died: %s\n", why[0] ? why : "(no reason given)");
+		exit(3);
+	}
+}
 static void core_set_rendering(int on) { g_SetRenderingEnabled(on); }
 static const uint32_t *core_video(int *w, int *h)
 {
