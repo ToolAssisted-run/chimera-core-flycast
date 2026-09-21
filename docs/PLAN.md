@@ -511,6 +511,78 @@ Chimera's firmware channel once the machine runs.
 
 ## Log
 
+- **2026-09-21** Per-pixel transparent sorting is NOT BUILT, and this is what
+  it would take (chimera issue #122, reopened by DmytroM1998: "Why not
+  perPixel also? It's the most accurate of the options").
+
+  He is right that it is the most accurate, and the answer is not "no" - it is
+  "not compiled, for three reasons, and one of them is a design choice this
+  core made on purpose". Read out of THIS build rather than out of upstream's
+  UI:
+
+  **1. The sources are not in the build.** `waterbox/sources.sh` compiles
+  `gles.cpp gldraw.cpp gltex.cpp quad.cpp postprocess.cpp naomi2.cpp` from
+  `core/rend/gles/` and nothing from `core/rend/gl4/`, which is where
+  upstream's per-pixel OpenGL renderer lives (`abuffer.cpp`, its own
+  `gles.cpp`/`gldraw.cpp`, `gl4naomi2.cpp`). Per-pixel is not a value of the
+  same knob: `RenderType::OpenGL_OIT` selects a DIFFERENT renderer through
+  `rend_GL4()`. That symbol is declared in `Renderer_if.cpp` and never called,
+  because patch 0003 replaces the whole selection switch with this core's own
+  software/GL choice - which is why the guest links today without gl4 being
+  compiled at all.
+
+  **2. The in-sandbox OpenGL cannot run it.** The gl4 path is `#version 430`
+  (gl4.h:225) and uses shader storage buffers, image load/store, atomic
+  counters and `glMemoryBarrier` (abuffer.cpp). This core's guest GL is
+  created with the legacy `OSMesaCreateContextExt` (waterbox/gl-osmesa.cpp:84)
+  and reports, at runtime, `3.3 (Compatibility Profile) Mesa 24.0.9
+  (softpipe)` - both from our own line and from Flycast's renderer log
+  ("OpenGL version 3.3"). A 3.3 context rejects a 430 shader. And softpipe is
+  not an accident: setup-mesa.sh picks it because it is "plain C - no JIT",
+  which is what makes `renderer: opengl` deterministic. llvmpipe would
+  advertise GLSL 450 (lp_screen.c:210 against softpipe's sp_screen.c:198) but
+  it is a JIT, so buying per-pixel for the deterministic renderer means
+  spending the reason that renderer exists.
+
+  **3. The GPU bridge does not carry the calls.** This core asks for 87 of
+  miniBox's 761 entry points (`waterbox/gl-entry-points.txt`) and none of
+  `glBindImageTexture`, `glMemoryBarrier`, `glBindBufferBase`,
+  `glBufferStorage`, `glGetProgramResourceIndex`,
+  `glShaderStorageBlockBinding` is among them. This is the CHEAP blocker:
+  every one of those names is already in miniBox's master list, so it is
+  adding names to a subset and regenerating, not a miniBox change.
+
+  **So, sized for a decision.** For `opengl-hw` (a real GPU through the
+  bridge) it is plausibly a short job: add four files to sources.sh, let the
+  renderer selection reach `rend_GL4()`, add about eight entry points to this
+  core's list, then measure it the way the other two were measured. The gl4
+  dependency surface is clean - it includes only `rend/gles/*` headers,
+  `rend/transform_matrix.h` and `hw/pvr/elan_struct.h`, and touches no imgui -
+  though note `rend/gl4` and `rend/gles` have same-named `gles.cpp` and
+  `gldraw.cpp`, which a flat object directory would collide on. For
+  `renderer: opengl` (the deterministic in-sandbox path) it is effectively
+  out, because it means llvmpipe and a JIT inside the sandbox. That is the
+  decision to take, and it is Sergio's, not this document's.
+
+  **What is already per-pixel, today.** The default `software` renderer.
+  skmp's reference rasteriser depth-peels with a tag buffer the way CORE does,
+  coplanar sorting included (`waterbox/refsw/refsw_lists.cpp`, and
+  `refsw_set_sorted` in refsw/bridge.h for the pre-sorted case). So the most
+  accurate translucency in this core is not missing - it is the default - and
+  `transparentSorting` correctly does nothing there. The setting's description
+  now says all of this instead of the sentence it used to carry, "a GL
+  renderer cannot", which the reporter was right to query: a GL 4.3 renderer
+  can, we just do not build one.
+
+  **A reading discarded on the way** (docs/gates.md, H). `nm -D` on the built
+  guest `libOSMesa.so` found none of the OIT entry points, which looked like a
+  fourth, independent blocker. The control killed it: the same command finds
+  no `glDrawArrays` or `glCompileShader` either, functions the renderer
+  demonstrably calls every frame. The symbols are not reached that way, so the
+  instrument was measuring nothing and the reading is not evidence. The
+  version report from the live context is, and it is what the finding rests
+  on.
+
 - **2026-09-21** Transparent sorting is the third renderer-only setting
   (chimera issue #122), classified by measurement before it was declared.
 
