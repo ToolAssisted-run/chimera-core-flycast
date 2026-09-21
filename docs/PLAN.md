@@ -1058,6 +1058,61 @@ Chimera's firmware channel once the machine runs.
   single-steps, and the only six places either handler touches the interrupted
   context are the guest-death escape.
 
+  **Pinned to one guest execution interval** (2026-09-21, seventh pass). Using
+  the guest's own disc-read calls as a coordinate (`Disc::ReadSectors`, reliable
+  because both runs issue the same reads until they part), with the recompiler's
+  reset and block-compile counters printed alongside:
+
+  | read # | ON | OFF |
+  |---|---|---|
+  | 6 | resets=2 compiles=1 fad=549149 | identical |
+  | 7 | resets=4 compiles=2084 fad=45166 | **identical** |
+  | 8 | resets=4 compiles=2101 fad=45166 | resets=4 compiles=2105 fad=**45170** |
+
+  At read 7 the two machines are identical to the byte - same guest RAM (the
+  earlier zero-noise page compare), same recompiler state, same reset count.
+  Between read 7 and read 8, running JIT code, ON asks the GD-ROM for FAD 45166
+  again while OFF advances to 45170, and ON then spirals (22 reads in 200 frames
+  where OFF makes 423). So a single recompiled SH4 computation returns a
+  different result in that one interval, epoch-on only, from identical inputs.
+  This is the whole bug, localised to one step of guest execution.
+
+  **The cache-reset hypothesis is dead.** The reset count is identical (4 = 4)
+  at read 7, at read 8, and through the divergence. `bm_ResetCache` is not
+  involved; the differing compile counts (2101 vs 2105) are a CONSEQUENCE of the
+  machines executing different code after they part, not a cause.
+
+  **The non-memory-read instruction class is closed.** The guest ELF has one
+  `rdrand`, four `rdseed` and eighty `cpuid`, all in startup / CPU-detection /
+  `std::random_device` paths. They cannot be the channel: two CLEAN runs, which
+  would draw different entropy and read the same cpuid, are byte-identical (the
+  zero noise floor), so nothing those instructions return reaches the
+  deterministic machine.
+
+  **Where the corrupted bytes live is downstream, not the cause.** The pages
+  that differ just after the divergence are written by the recompiler and block
+  manager - `X64Dynarec::compile`, `std::vector<shil_opcode>::_M_realloc_append`,
+  the `blkmap` red-black tree - and include one page inside the RWX code cache
+  (`SH4_TCB`). They are the products of the diverged execution.
+
+  **RETRACTED (hazard H): the "first divergent store at rip 0xceef54".** A
+  watchpoint on the divergent heap page seemed to show that store parting the
+  runs, but the disassembly shows it stores a constant immediate
+  (`movl $0x80041e, ...`) and the raw log shows it executing identically in both
+  runs; the apparent divergence was a whole-run count artifact of the machines
+  diverging (total compile counts differ once they part). A recycled heap page
+  plus constant-initialiser stores made the write-stream alignment unreliable;
+  withdrawn.
+
+  So the open question is now at its sharpest: BETWEEN GD-ROM READ 7 AND READ 8,
+  ONE RECOMPILED SH4 BLOCK COMPUTES A DIFFERENT RESULT, with byte-identical guest
+  RAM and identical recompiler state going in, no cache reset, epoch-on only -
+  and every enumerable host-visible input (memory of every class, the full
+  register file including x87/ymm/MXCSR/eflags, syscall results, delivered bytes)
+  is identical across the perturbation. Naming the exact SH4 instruction needs an
+  architectural-state trace inside that one interval, which is the next step and
+  the first that would require it.
+
   Still unexplained, and deliberately not smoothed over: frames 173 and 179 are
   NOT busy frames - they sit in a region making one syscall each - so "the next
   busy frame" explains 137 and does not explain the rest of the event table.
