@@ -774,9 +774,11 @@ Chimera's firmware channel once the machine runs.
   - so it is a systematic difference rather than a race, and whoever picks it
   up will get it on the first try.
 
-  **This is miniBox's, not this core's.** It wants raising in miniBox rather
-  than patched around here, and until it is, `cpu=jit` is a Linux-only setting
-  in practice.
+  **This is miniBox's, not this core's.** It was raised in miniBox and fixed
+  there (guest code carries no red zone, 2026-09-21); `cpu=jit` is no longer a
+  Linux-only setting. The paragraphs below are the investigation as it stood
+  before the cause was known, kept because the ruled-out list is what makes the
+  answer believable - read them as history, not as current advice.
 
   **Reproduce it in ten seconds, with no greenzone storage at all**
   (2026-09-21). `run-wbx --epoch` opens an epoch before every frame and takes
