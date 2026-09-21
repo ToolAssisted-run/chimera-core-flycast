@@ -849,6 +849,50 @@ Chimera's firmware channel once the machine runs.
   wrong, or there is a channel nobody has enumerated. Nobody should write a fix
   or a gate leg until something measured explains it.
 
+  **Two more channels enumerated and closed, and one symptom retracted**
+  (2026-09-21, second pass):
+
+  - The epoch path never writes guest-visible memory and never remaps
+    anything. Its only effect on the address space is `VirtualProtect` on the
+    guest view; the only writes to guest memory in memblock.c are munmap's
+    zeroing, the pre-seal ELF load, and a state load, none of which an epoch
+    touches.
+  - A block's section IS mapped through two views - the guest view, whose
+    protection is managed, and the always-RW mirror the host reads through - and
+    protection on Windows is per-view, so this was worth checking. Measured on
+    both hosts: the two views agree in every combination, including the one that
+    matters (a host write through the mirror to a page the guest view is holding
+    read-only is visible immediately, does not fault, and the guest's own next
+    write still faults and is still counted). Inside the guest there is no
+    aliasing at all: `waterbox/stubs/vmem-stub.cpp` makes `virtmem::init()`
+    return false and `create_mappings()` a no-op, so the Dreamcast's RAM mirrors
+    are address masking in software. The same stub makes `region_lock` and
+    friends no-ops, which independently confirms the census finding that this
+    core never asks the sandbox to watch a page.
+  - Host addresses DO sit in the guest's callee-saved registers at guest rips -
+    heap, stack and image-base values in rbx, rbp and r12-r15, on both hosts.
+    They are PROVEN INERT: a 32 MB host allocation before the guest is created
+    demonstrably moves them (827 of 116,534 fault records differ) and leaves the
+    machine byte-identical. They also differ between any two processes by ASLR
+    while the machine does not, which means a register comparison between two
+    PROCESSES can never isolate an epoch effect in those registers - worth
+    knowing before anyone repeats it.
+
+  **RETRACTED: the sector-read miss is a symptom, not the cause.** Diffing the
+  two runs' whole guest log gives one difference and one only - ten
+  `Sector Read miss` lines - and following it is satisfying: `Disc::readSector`
+  fails only when `chd_read` fails, `chd_read` fails only because the CD-LZMA
+  codec returns `CHDERR_DECOMPRESSION_ERROR`, and that happens ten times with
+  epochs on and never without. Then add an unrelated probe elsewhere in the
+  LZMA path and rebuild the guest: the misses vanish completely and frame 137
+  still diverges. So the decompression failure is where the damage SURFACED in
+  one particular guest binary, and the brk-page region bisect that implicated
+  LZMA is about the same thing. The divergence frame is stable across guest
+  builds; the symptom is not. (One probed build also died outright on Windows
+  with `mov %rsi,0x30(%r10)` and r10 = 0, which is the register-leak family of
+  `d9de49d`; it is a probed-build artefact and is recorded here only so nobody
+  mistakes it for the bug.)
+
   **Do not read "the interpreter is fine" as "the interpreter is safe."** The
   caveat as it stands: it may only mean the interpreter's Dreamcast never
   reaches the fragile moment in the frames tested. The implicated code - the
