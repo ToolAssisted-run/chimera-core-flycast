@@ -730,20 +730,130 @@ Chimera's firmware channel once the machine runs.
   - so it is a systematic difference rather than a race, and whoever picks it
   up will get it on the first try.
 
-  **This is miniBox's, not this core's.** The one thing `cpu=jit` has that
-  nothing else here does is an 11 MB RWX region inside the guest image - the
-  recompiler's code cache, `DECLARE_CODE_CACHE(SH4_TCB)` in `.text`, made
-  writable by `waterbox/stubs/vmem-stub.cpp`. The greenzone holds a clean page
-  read-only and waits for the write to fault (`mb_page_native_prot`: a clean
-  `MB_ST_RWX` page is held at `MB_PROT_RX`, which on Windows is
-  `PAGE_EXECUTE_READ`), and that hold is the only thing switching the greenzone
-  on turns on. A write to the code cache that the hold swallows leaves the
-  recompiler executing code it did not emit, which is exactly a game that
-  wanders off. Note also that `run-wbx --rerecord` - save and load around every
-  frame - does NOT reproduce it, which points at the EPOCH HOLD path rather
-  than at save/load.
-  It wants raising in miniBox rather than patched around here, and until it is,
-  `cpu=jit` is a Linux-only setting in practice.
+  **This is miniBox's, not this core's.** It wants raising in miniBox rather
+  than patched around here, and until it is, `cpu=jit` is a Linux-only setting
+  in practice.
+
+  **Reproduce it in ten seconds, with no greenzone storage at all**
+  (2026-09-21). `run-wbx --epoch` opens an epoch before every frame and takes
+  its forward delta after it - the greenzone's epoch machinery and nothing
+  else: no savestate, no history file, no frontend. Cross-build run-wbx with
+  mingw against miniBox's Windows host DLL and run the PE through interop from
+  a copy under `%TEMP%`:
+
+      run-wbx core.wbx <workdir with the disc and {"cpu":"jit"}> \
+              --frames 1000 --epoch --machine-trace mt.txt
+
+  Linux epochs off and on agree; Windows epochs off agrees with Linux byte for
+  byte; **Windows with epochs on parts from both at frame 137** of Prince of
+  Persia and stays wrong. Deterministic: three runs give the same trace.
+
+  **The RWX code cache is NOT the carrier, and the paragraph that used to stand
+  here was wrong.** Measured on the real Windows box, against that
+  reproduction:
+
+  - The code cache goes HOT within three frames (`page_heat`), and a hot page
+    is never held. Suppressing the epoch hold on `MB_ST_RWX` pages changes the
+    fault count by ZERO and still diverges at 137.
+  - Suppressing it on plain `MB_ST_RW` pages makes Windows agree with Linux.
+  - Bisecting by region, the hold must be dropped on the BRK HEAP, pages
+    22883-22947 of the block - 256 KB written by `LzmaDec_DecodeReal2`,
+    `LzmaDec_DecodeToDic` and `memcpy`, which is the CHD decompressor. The
+    first visible symptom is the guest printing
+    `imgread/common.cpp:343 W[GDROM]: Sector Read miss FAD: 45166`.
+  - Holding ONE page (22914) for ONE epoch - four extra faults in a run of
+    120,078 - is enough. The same hold on Linux changes nothing.
+  - The divergence lands on the next "event frame" at or after the hold, not a
+    fixed number of frames later: a hold anywhere in frames 1-137 diverges at
+    137, one in frames 144-169 diverges at 173, one at frame 179 diverges at
+    179. A hold at frame 1 and a hold at frame 137 produce identical traces, so
+    the damage is one-time, idempotent and latent.
+
+  **What is ruled out**, each by direct measurement on both hosts rather than
+  by reading: the guest's own fault handler (never called - `trip` handles
+  every write fault and refuses none); hot pages; the Windows-only stack-shadow
+  epoch code; the delta save itself (the hold alone, with no `save_delta`,
+  still diverges); lost or non-restartable stores (`rep stosb/stosq/movsb` over
+  held pages, unaligned 8-byte and `movups` stores straddling held page
+  boundaries, and the host C library's own `memcpy`/`memmove` into held pages
+  at 19 lengths by 13 offsets are all byte-exact); the whole register file
+  (14 GPRs, ymm0-ymm15, MXCSR, the x87 control word, the direction flag all
+  survive a fault on both hosts); `VirtualProtect` failing silently (its return
+  is ignored in `refresh_range`, but it never fails here - instrumented, zero
+  in 140 epoch frames); and VAD splitting (protecting one page in the middle of
+  a region splits the reported region into three runs on BOTH hosts and
+  coalesces back to one when the protection is restored, with the extent
+  returning to its exact original value; `MEM_RELEASE` and `UnmapViewOfFile`
+  still work on a split region).
+
+  One new Windows fact came out of it, and it is NOT the cause: delivering an
+  access violation writes the exception frame onto the faulting thread's own
+  stack, where Linux on its alternate signal stack writes nothing. That was
+  first measured with a probe, which is a synthetic stand-in (docs/gates.md,
+  E), so it was measured again ON THE REAL RUN and bounded from both sides:
+
+  - `EXCEPTION_POINTERS` hands the handler the addresses of the
+    `EXCEPTION_RECORD` and `CONTEXT` the kernel placed on that stack, so their
+    extent IS the measurement, with no pre-image needed and at every stack
+    depth and alignment the real run produces. Over more than 160,000 faults in
+    the real run the frame NEVER comes closer than **376 bytes** to the trap
+    `%rsp` (typical 376-424) and reaches at most 1,840 bytes below it. The SysV
+    red zone is 128 bytes, so the margin is at least 248 bytes and is never
+    crossed.
+  - The Linux control that emulates the damage originally stopped 313 bytes
+    short of `%rsp`, which excluded the red zone BY CONSTRUCTION and so could
+    not have caught a red-zone clobber. Re-run with the exclusion removed it
+    has a demonstrated failure mode: filling `[rsp-3376, rsp-128)` with zeros
+    leaves the machine byte-identical, while filling to `rsp-64`, `rsp-16` or
+    `rsp` KILLS the guest. So the red zone is load-bearing, Windows does not
+    touch it, and if it ever did the symptom would be a dead guest rather than
+    a wandering one.
+  - Register state across a REAL fault, captured on entry to the handler and
+    again on the way out: in 160,000 faults, the upper halves of ymm0-ymm15 are
+    clobbered in ZERO of them, and the CONTEXT record (every GPR, rip, eflags,
+    MXCSR) is modified in ZERO of them. The handler does clobber the low halves
+    of xmm - it is C code that calls memcpy - and the OS restores those from the
+    CONTEXT, which the end-to-end probe confirms independently.
+
+  A warning for whoever instruments this next: heavy instrumentation PERTURBS
+  the run. Hashing the whole arena from inside the fault handler after every
+  fault produced a confident, wrong lead (a heap page appearing to diverge)
+  that did not reproduce once the hashing was made cheap. Every finding here
+  was re-run with light instrumentation before being believed, and two earlier
+  readings had to be thrown away for exactly this reason.
+
+  What is left unexplained is the carrier, and it is worth stating at its
+  sharpest because that is what the next person has to break. Take the minimal
+  perturbation - one page held for one epoch - and compare it against the same
+  run with no hold at all, on the same Windows box:
+
+  - Every byte of VISIBLE guest memory is identical, checked after every one of
+    the guest's syscalls, right up to and including syscall 1653. Syscall 1654
+    is the first thing the guest does differently.
+  - Every byte the host delivered to every guest read is identical (368 reads,
+    hashed at the point of delivery) until the guest itself changes course.
+  - miniBox's whole per-page tracker - status, dirty, hot, heat, seen, snapshot
+    kind, shadow, committed, invisible - is identical at every frame boundary.
+  - The ONLY difference anywhere in the address space is five pages of the
+    guest's main stack BELOW %rsp, which is where Windows builds its exception
+    frame - and that comparison now includes INVISIBLE pages and FREE pages,
+    whose contents a guest gets back on its next mmap. Nothing else differs, at
+    any fault boundary inside the diverging frame.
+  - Narrowed from syscalls to faults: the visible arena is identical after
+    every one of the ~1,000 faults of the diverging frame up to the point where
+    the guest changes course, so the haystack is a single frame's worth of
+    guest execution with no host event in it.
+
+  So a guest with identical memory, identical inputs and identical registers
+  behaves differently, deterministically. One of those four statements must be
+  wrong, or there is a channel nobody has enumerated. Nobody should write a fix
+  or a gate leg until something measured explains it.
+
+  **Do not read "the interpreter is fine" as "the interpreter is safe."** The
+  caveat as it stands: it may only mean the interpreter's Dreamcast never
+  reaches the fragile moment in the frames tested. The implicated code - the
+  CHD/LZMA decompressor in the brk heap - is shared by both settings, so the
+  recompiler may be a trigger rather than the subject.
 
   **A smaller host difference, separately.** Under jit with the greenzone off,
   Linux and Windows part at frame 1,550 in 28 bytes at `0x8C2B3AE2`: a fragment

@@ -4,10 +4,16 @@
  * the guest under its basename - exactly what the frontend does with a
  * project's files, slot map and settings.
  *
- * usage: run-wbx <core.wbx> <workdir> [run-native's options] [--rerecord] [--turbo]
+ * usage: run-wbx <core.wbx> <workdir> [run-native's options] [--rerecord] [--epoch] [--turbo]
  *
  * --rerecord round-trips the WHOLE guest machine through the host's
  * save/load state around every frame; the digests must be identical.
+ *
+ * --epoch opens an epoch before every frame and takes its forward delta after
+ * it, which is the greenzone's page-tracking machinery and nothing else - no
+ * savestate, no history file, no frontend. The digests must be identical to a
+ * run without it, because none of that is visible to the guest. On Windows
+ * with cpu=jit they are not: see docs/PLAN.md.
  */
 #include "minibox.h"
 
@@ -69,7 +75,10 @@ static ptrfn_i32 g_GetSaveDataFileName, g_GetSaveDataFileBuffer;
 static i64fn_i32 g_GetSaveDataFileSize;
 static voidfn_i g_SetRenderingEnabled;
 static int g_rerecord;
+static int g_epoch;        /* --epoch: open an epoch and take a delta every frame */
+static int g_epoch_open;
 static membuf g_state;
+static membuf g_delta;
 
 static uintptr_t proc(mb_host *h, const char *n)
 {
@@ -138,6 +147,21 @@ static int64_t core_domain_size(int i) { return g_GetMemoryDomainSize(i); }
 
 static void core_pre_frame(void)
 {
+	mb_return er;
+	if (g_epoch)
+	{
+		/* Exactly what the greenzone does: close the epoch the last frame ran
+		 * in by taking its forward delta, then mark now for the next one. */
+		if (g_epoch_open)
+		{
+			g_delta.len = 0;
+			wbx_save_delta(g_host, true, mem_write, (uintptr_t)&g_delta, &er);
+			if (er.error_message[0]) { fprintf(stderr, "save_delta: %s\n", er.error_message); exit(1); }
+		}
+		wbx_epoch_begin(g_host, &er);
+		if (er.error_message[0]) { fprintf(stderr, "epoch_begin: %s\n", er.error_message); exit(1); }
+		g_epoch_open = 1;
+	}
 	if (!g_rerecord)
 		return;
 	mb_return r;
@@ -159,7 +183,10 @@ int main(int argc, char **argv)
 	const char *wbxPath = argv[1];
 	const char *workdir = argv[2];
 	for (int i = 3; i < argc; i++)
+	{
 		if (!strcmp(argv[i], "--rerecord")) g_rerecord = 1;
+		if (!strcmp(argv[i], "--epoch")) g_epoch = 1;
+	}
 
 	struct gate_opts o;
 	if (!gate_parse_opts(argc, argv, 3, &o))
@@ -280,5 +307,6 @@ int main(int argc, char **argv)
 	wbx_deactivate_host(g_host, &r);
 	wbx_destroy_host(g_host, &r);
 	free(g_state.b);
+	free(g_delta.b);
 	return ret;
 }

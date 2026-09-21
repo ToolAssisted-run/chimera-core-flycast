@@ -564,7 +564,7 @@ static int gate_parse_opts(int argc, char **argv, int first, struct gate_opts *o
 			o->holdAxis = (int)strtol(argv[++i], 0, 0);
 			o->holdValue = (int)strtol(argv[++i], 0, 0);
 		}
-		else if (!strcmp(argv[i], "--rerecord")) ; /* run-wbx's; ignored here */
+		else if (!strcmp(argv[i], "--rerecord") || !strcmp(argv[i], "--epoch")) ; /* run-wbx's; ignored here */
 		else { fprintf(stderr, "unknown argument %s\n", argv[i]); return 0; }
 	}
 	return 1;
