@@ -1157,6 +1157,81 @@ Chimera's firmware channel once the machine runs.
   architectural-state trace inside that one interval, which is the next step and
   the first that would require it.
 
+  **Item C, and what fell out of it** (2026-09-21, eighth pass). The full
+  register file - GPRs, rflags, fs, the whole FXSAVE area (FCW 0x37f, MXCSR
+  0x9fa0, every xmm) and all sixteen ymm including upper halves - taken at the
+  SAME architectural point in both runs (a hardware data breakpoint on the byte
+  the causal store writes, which traps after the store whether or not the page
+  was held) is BYTE-IDENTICAL. The register file is exonerated outright.
+
+  The breakpoint itself then said more than the registers: OFF with ONE debug
+  trap at that store - a run that never protects the page, never calls
+  `VirtualProtect`, never touches the tracker; the handler only clears DR6 -
+  diverges at 137 too (reproducible; the wrong machine differs by perturbation
+  but the frame does not). So any exception delivered to that instruction is
+  enough. Nothing miniBox does in the handler is the cause.
+
+  **The bytes that carry it, named and repaired.** At the causal fault the
+  guest's red zone [rsp-0x80, rsp-0x30) reads as zeros on Windows where Linux
+  holds `LzmaDec_DecodeReal2`'s spills (`limit2` at -0x68, `bufLimit` at
+  -0x50, ...). Restoring Linux's 128 red-zone bytes from inside the handler,
+  once, at that trap, gives a machine BYTE-IDENTICAL to Linux for 200 frames
+  (twice). Replaying those same 128 Windows bytes into the LINUX guest at the
+  same fault makes Linux diverge at 137 with the same first symptom
+  (`Sector Read miss FAD: 45166` - a failed hunk decode). Slices: the kernel's
+  own records ([rsp-1832, rsp-416)) replayed alone change nothing; the red
+  zone alone is the whole effect. The earlier Linux constant-fill controls
+  filled from rsp-313 (later rsp-128) DOWN and so never touched this range;
+  they were not wrong, they were aimed 128 bytes too low.
+
+  **How the bytes get there, measured from three sides.** (1) Single-stepping
+  the prologue: `mov %rdx,-0x50(%rsp)`, `mov %rdx,-0x68(%rsp)` and
+  `mov %eax,-0x58(%rsp)` leave memory unchanged one instruction later, while
+  `mov %r10,-0x10(%rsp)` and `mov %esi,-0x18(%rsp)` land - same rsp, same
+  form, eight bytes apart across 0x36f05822140 = rsp-0x28. (2) A second
+  thread spinning on the slots SEES each store land (0x4980 appears, cross-
+  core) and then sees it put back to the value it had when the previous
+  exception returned - before any vectored handler runs (an extra handler
+  registered CALL_FIRST already reads the reverted value). (3) A marker written
+  from the handler survives; the guest's later stores into the same lines do
+  not. So: at every exception delivered while `rsp` = R, the bytes below R-0x28
+  are overwritten with their content as of the previous exception's return, by
+  the kernel or by ntdll's dispatch prologue - in this process. It does not
+  happen in plain Windows programs (int3, data breakpoint, guard-page and
+  restarted access violations; own stack, VirtualAlloc, section views; distinct
+  values per leg), nor in a miniBox block with `rsp` inside it, nor with the
+  TEB stack bounds pointed at that block, nor with the TEB bounds the blob
+  installs (`StackBase = -1`, `StackLimit = 0` - noted here as a fact worth
+  its own look), nor in the conformance guest under the real interop path.
+  Removing the blob's gs:0x18 pointer or giving the guest a sane TEB range for
+  the twenty instructions between two stores changes nothing.
+
+  **Closed on the way**: not the JIT (the fault is in static LZMA code); not
+  cross-core (pinned to one P-core or one E-core it diverges identically); not
+  a mapping change (the window holds 409 `brk` calls and nothing else); not a
+  stale cache line (`clflush` reveals nothing); not an interposed page (host
+  stores to the line cost 1.6 cycles); not user-mode CET (off); no injected
+  module (ntdll, kernel32, kernelbase, msvcrt, libminiboxhost only). Two of my
+  own instruments lied and are recorded as such: nested exceptions taken with
+  `rsp` = R put their context record exactly where the outer one sits and
+  corrupt it (the "rule map" crash), so every nested-exception reading was
+  void; and marker censuses that write at one exception's exit and read at the
+  next's entry cannot see a restore-to-last-exit - that blindness hid the
+  effect for two rounds and is worth a line in docs/gates.md.
+
+  **What is still open**: WHICH component writes the old bytes back, and
+  WHICH condition of this process (not reproduced by any probe so far)
+  enables it. The instruments - data breakpoints, the sampler thread, the
+  CALL_FIRST observer, single-step, red-zone repair/mark, TEB/fs knobs - are
+  saved as one patch (`redzone-hunt-instruments.patch` in the session
+  scratchpad) and were reverted; miniBox is clean and the gate is green.
+  The repair is a proof, not a fix: a handler cannot know the 128 bytes the
+  guest wanted. The candidate fixes are outside miniBox's handler - a guest
+  toolchain built with `-mno-red-zone` (leaf functions stop keeping state
+  below rsp, which is what the Windows ABI already assumes), or a change to
+  how the guest is presented to Windows once the enabling condition is named.
+  Neither ships without the condition.
+
   Still unexplained, and deliberately not smoothed over: frames 173 and 179 are
   NOT busy frames - they sit in a region making one syscall each - so "the next
   busy frame" explains 137 and does not explain the rest of the event table.
