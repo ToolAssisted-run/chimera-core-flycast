@@ -18,10 +18,18 @@ diff --git a/core/rend/gles/gles.h b/core/rend/gles/gles.h
 diff --git a/core/rend/gles/gles.cpp b/core/rend/gles/gles.cpp
 --- a/core/rend/gles/gles.cpp
 +++ b/core/rend/gles/gles.cpp
-@@ -1324,8 +1324,57 @@
+@@ -1324,8 +1324,100 @@
     is the frontend's policy for the moment and not part of the machine. */
  extern "C" int chimera_render_enabled;
  
++/* chimera: set by the ABI layer's StateLoaded export after every load of the
++   machine, and cleared by the check below when it has taken it into account.
++   Defined next to chimera_render_enabled and in the same memory the savestate
++   does not cover, for the same reason: it is a fact about the HOST's last
++   action and not about the machine, so a state must neither carry it nor
++   overwrite it. See ZERO MEANT TWO THINGS below. */
++extern "C" int chimera_gl_state_loaded;
++
 +#ifdef CHIMERA_GUEST_GL
 +/* Which context the GL calls are landing on (miniBox source/gl:
 +   GL_OP_CONTEXT_ID). Zero when there is no bridge, or the host predates the
@@ -36,6 +44,35 @@ diff --git a/core/rend/gles/gles.cpp b/core/rend/gles/gles.cpp
 +   is enough, and a whole-machine savestate restores it like everything else,
 +   which is exactly what makes the mismatch visible after a load. */
 +static u64 s_chimera_gl_context = 0;
++
++/* chimera: ZERO MEANT TWO THINGS, AND ONE OF THEM WAS A LIE (chimera issue 126).
++ *
++ * The static above starts at 0 and is first written by the check below, which
++ * runs when this renderer is about to draw. So there is one state in every
++ * session that carries 0 while the renderer's GL OBJECTS ALREADY EXIST: the
++ * greenzone's frame-0 anchor, taken right after Init - which is where
++ * OpenGLRenderer::Init() runs - and before the first frame advance. Loading it
++ * used to read that 0 as "this machine has never held any GL objects, nothing
++ * to rebuild", when what it really means is "this state was taken before the
++ * renderer ever looked, so it cannot vouch for the objects the driver is
++ * holding NOW". Those objects are whatever the frames after the anchor left
++ * behind: textures resized, render targets deleted and handed out again,
++ * framebuffers reattached. The renderer would then draw from emulated memory
++ * describing frame 0 into driver objects as of frame N.
++ *
++ * Reported on PCSX2 and Maximo: Ghosts to Glory as a corrupt picture when a
++ * movie is played from frame 0 or frame 1 and a clean one from frame 2, which
++ * is exactly where TAStudio stops reaching for the anchor (it loads the state
++ * BEFORE the frame it is going to). The same code was in every bridged core.
++ *
++ * So the host's word for it is kept instead of being guessed from the number:
++ * the engine tells every core when the machine's memory has been replaced
++ * (the StateLoaded export), and after one of those the stored 0 cannot be
++ * trusted. Recording the id during Init instead would put it in the SEALED
++ * baseline, where no state carries it as a delta, and the cross-session
++ * rebuild that this whole function exists for would stop happening; a non-zero
++ * "never seen" sentinel fails identically, because the frame-0 anchor carries
++ * whatever the static's initial value is. */
 +
 +/* chimera: has the ground moved? Every object this renderer holds is a NAME a
 +   particular GL context handed out, and a whole-machine savestate carries
@@ -53,11 +90,17 @@ diff --git a/core/rend/gles/gles.cpp b/core/rend/gles/gles.cpp
 +   a clean slate. */
 +void chimera_check_gl_context(OpenGLRenderer *renderer)
 +{
++	/* taken and cleared here, whatever the ids say: it has been read into this
++	   decision, and leaving it set would rebuild again at the next id change
++	   for a load that is long past */
++	const bool afterLoad = chimera_gl_state_loaded != 0;
++	chimera_gl_state_loaded = 0;
++
 +	const u64 live = chimera_gl_context_id();
 +	if (live == 0 || live == s_chimera_gl_context)
 +		return;
 +
-+	if (s_chimera_gl_context != 0)
++	if (s_chimera_gl_context != 0 || afterLoad)
 +	{
 +		WARN_LOG(RENDERER, "chimera: GL objects came from context %llu, now %llu; rebuilding",
 +			(unsigned long long)s_chimera_gl_context, (unsigned long long)live);

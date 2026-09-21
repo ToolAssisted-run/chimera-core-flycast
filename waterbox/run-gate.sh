@@ -1028,6 +1028,86 @@ else
 	fi
 fi
 
+# ---- a restore rebuilds the GL objects, the frame-0 anchor included (#126)
+#
+# On the GPU bridge the renderer's objects live in the driver and a savestate
+# carries only their NAMES, so the engine mints a fresh context id on every
+# state load and this core rebuilds when the id it stored beside those objects
+# no longer matches (chimera_check_gl_context, patches/0015).
+#
+# One state used to slip through: the greenzone's frame-0 anchor, taken right
+# after Init - which is where OpenGLRenderer::Init() runs - and before the first
+# frame advance, so it is the only state in a session that carries the stored
+# id's initial ZERO while the objects already exist. That zero was read as
+# "nothing to rebuild", the renderer kept whatever objects the frames after the
+# anchor had left in the driver, and drew frame 0's geometry into them.
+#
+# What it measures: the calls that cross the bridge on the drawing frame, with
+# and without a restore in front of it. A rebuild is a Term() and an Init() -
+# hundreds of calls here - on top of the drawing.
+#
+# WHAT THIS DOES NOT STAND IN FOR (docs/gates.md, E). triangle.elf renders on
+# exactly ONE frame of its life and then spins, so the only restore this
+# program can measure is one whose replay reaches that frame - the anchor. A
+# restore to frame 2, which is the other half of PCSX2's leg, cannot be
+# measured here at all: the replay never draws again, so the check never runs
+# and the count is the same with the bug and without it. The control here is
+# the same drawing frame in a run with NO restore instead, which is also the
+# assertion that a fresh boot does not rebuild. And llvmpipe is not a driver:
+# this proves the rebuild RUNS, not that a real game's picture is right on real
+# hardware.
+if [ -z "$chimera_root" ] || [ ! -x "$crun" ] || [ ! -f "$cpkg" ]; then
+	report "gl:rebuild-at-zero" SKIP "needs chimera-run and a built flycast.chimeraCore (set CHIMERA_ROOT)"
+else
+	gz="$work/glzero"
+	mkdir -p "$gz"
+	printf '[Input]\nLogKey:#\n' > "$gz/none.txt"
+	# a movie of its own: --rewind-loop needs frames to rewind through
+	"$crun" "$cpkg" "$root/tests/roms/triangle.elf" "$gz/none.txt" \
+		--settings '{"renderer":"opengl-hw"}' --frames 40 --record "$gz/movie.txt" \
+		> "$gz/record.log" 2>&1
+	# The core's own log colours its lines and leaves the reset sequence at the
+	# START of the next one, so a rebuild's WARN_LOG glues itself to the front
+	# of the frame line that follows it. Hence grep -o rather than an anchor.
+	# The busiest frame of a run, NOT COUNTING THE FIRST: frame 1 is the
+	# context being given back after Init, where OpenGLRenderer::Init() built
+	# every object, and it is not a frame of the movie. What is left is the one
+	# frame triangle.elf draws on (203 calls here against Init's 322).
+	biggestFrame() { grep -o "\[ce-gl\] frame [0-9]*: [0-9]* calls" "$1" | awk '$3 != "1:" { print $4 }' | sort -n | tail -1; }
+	afterRestore() { # the first traced frame after the restore line
+		awk '/ce-gl-audit\] restore/ { seen = 1 }
+		     seen && match($0, /\[ce-gl\] frame [0-9]+: [0-9]+ calls/) {
+			s = substr($0, RSTART, RLENGTH); split(s, f, " "); print f[4]; exit }' "$1"
+	}
+	if [ ! -s "$gz/movie.txt" ]; then
+		report "gl:rebuild-at-zero" FAIL "could not record a movie to rewind through (see $gz/record.log)"
+	else
+		CHIMERA_GL_TRACE=1 CHIMERA_GL_STATEAUDIT=1 "$crun" "$cpkg" \
+			"$root/tests/roms/triangle.elf" "$gz/movie.txt" \
+			--settings '{"renderer":"opengl-hw"}' --frames 40 --gpu \
+			> "$gz/plain.log" 2>&1
+		CHIMERA_GL_TRACE=1 CHIMERA_GL_STATEAUDIT=1 "$crun" "$cpkg" \
+			"$root/tests/roms/triangle.elf" "$gz/movie.txt" \
+			--settings '{"renderer":"opengl-hw"}' --frames 40 --gpu \
+			--greenzone 4096 --rewind-loop 0,1 > "$gz/rewind0.log" 2>&1
+		drew="$(biggestFrame "$gz/plain.log")"
+		after="$(afterRestore "$gz/rewind0.log")"
+		if grep -q "^chimera gl: no context" "$gz/plain.log"; then
+			report "gl:rebuild-at-zero" SKIP "this build or this machine gives the bridge no GL context: $(sed -n 's/^chimera gl: no context //p' "$gz/plain.log" | head -1)"
+		elif [ -z "$drew" ] || [ -z "$after" ]; then
+			report "gl:rebuild-at-zero" FAIL "nothing was traced across the bridge (see $gz/plain.log and $gz/rewind0.log)"
+		elif grep -q "rebuilding" "$gz/plain.log"; then
+			report "gl:rebuild-at-zero" FAIL "a run with no state load rebuilt the renderer anyway: $(grep -o 'chimera: GL objects came from.*' "$gz/plain.log" | head -1)"
+		elif ! grep -q "rebuilding" "$gz/rewind0.log"; then
+			report "gl:rebuild-at-zero" FAIL "restoring the frame-0 anchor made $after GL calls on the drawing frame, against $drew with no restore at all, and the renderer never said it was rebuilding"
+		elif [ "$after" -lt $((drew * 2)) ]; then
+			report "gl:rebuild-at-zero" FAIL "restoring the frame-0 anchor made $after GL calls on the drawing frame, against $drew with no restore at all: too few for a Term()+Init() on top of the drawing"
+		else
+			report "gl:rebuild-at-zero" PASS "restoring the frame-0 anchor rebuilds - $after calls on the drawing frame against $drew with no restore, and no rebuild without one"
+		fi
+	fi
+fi
+
 echo
 echo "$ok ok, $failed failed, $skipped skipped"
 [ "$failed" -eq 0 ]

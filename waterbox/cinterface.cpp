@@ -116,6 +116,16 @@ static bool g_loaded;
  * back into it when it is loaded to be looked at. */
 extern "C" { ECL_INVISIBLE int chimera_render_enabled = 1; }
 
+/* Set by StateLoaded below and read by the GL renderer's context check
+ * (patches/0015, core/rend/gles/gles.cpp). It is the host's word that the
+ * machine's memory has just been replaced, which is the one thing the stored
+ * context id cannot tell that renderer for itself - see the comment there.
+ *
+ * ECL_INVISIBLE for the same reason as the flag above: this is a fact about
+ * what the HOST did a moment ago, not about the machine, so a savestate must
+ * neither carry it nor put a stale one back. */
+extern "C" { ECL_INVISIBLE int chimera_gl_state_loaded = 0; }
+
 /* The wire: FOUR Dreamcast ports, each with the same superset of controls.
  * Order is the frontend's button order and must match waterbox.config - player
  * by player, and within a player exactly this list. */
@@ -1126,6 +1136,15 @@ ECL_EXPORT uint32_t *GetVideoBgra(void)
  * turbo leg is the proof - N undrawn frames plus one drawn one come out byte for
  * byte the same machine, and the same picture, as N+1 drawn ones. */
 ECL_EXPORT void SetRenderingEnabled(int on) { chimera_render_enabled = on != 0; }
+
+/* Told after every load of the machine - a savestate, a branch file, a
+ * greenzone restore - with the machine stopped and before it runs again. The
+ * only thing this core keeps that a load invalidates is the GL renderer's
+ * claim about which context its objects came from, and the claim a state made
+ * BEFORE the renderer ever looked is the one that was believed and should not
+ * have been (chimera issue 126). Set after the load, so the load cannot wipe
+ * it - and this flag is invisible memory, so it could not anyway. */
+ECL_EXPORT void StateLoaded(void) { chimera_gl_state_loaded = 1; }
 
 ECL_EXPORT int GetVideoWidth(void) { return g_videoWidth; }
 ECL_EXPORT int GetVideoHeight(void) { return g_videoHeight; }

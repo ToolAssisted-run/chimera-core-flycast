@@ -511,6 +511,80 @@ Chimera's firmware channel once the machine runs.
 
 ## Log
 
+- **2026-09-21** A stored context id of ZERO was read as "nothing to rebuild",
+  and the frame-0 anchor is the one state that carries it (chimera issue #126).
+
+  Found on PCSX2 and fixed there first; the same code was in this core, to the
+  line, because it was copied between every bridged core.
+
+  `chimera_check_gl_context` (patches/0015) compares the context id stored
+  beside this renderer's GL objects with the one the calls are landing on, and
+  rebuilds when they differ. The stored id is a file static that starts at 0 and
+  is first written when the renderer is about to draw. The greenzone's frame-0
+  anchor is taken right after Init - which is where `OpenGLRenderer::Init()`
+  runs, all 322 GL calls of it - and before the first frame advance, so it is
+  the only state in a session that carries that initial 0 while the objects
+  already exist. The guard `if (s_chimera_gl_context != 0)` read the 0 as "this
+  machine has never held any GL objects". It means "this state was taken before
+  the renderer looked", and the objects in the driver were whatever the frames
+  after the anchor had left there.
+
+  Why a user meets it: TAStudio reaches a frame by loading the state BEFORE it
+  and emulating one frame forward (`PriorStateForFramebuffer` is
+  `Nearest(frame - 1)`), so frames 0 and 1 both reach for the anchor and frame 2
+  is the first that does not. That is the fingerprint the reporter of #126
+  described on PCSX2 - corrupt from frame 0 or 1, clean from frame 2.
+
+  The fix keeps the host's word instead of inferring it from the number. The
+  engine already tells every core when the machine's memory has been replaced
+  (the optional `StateLoaded` export), and after one of those the stored 0
+  cannot be trusted: `if (s_chimera_gl_context != 0 || afterLoad)`. The flag is
+  `chimera_gl_state_loaded`, defined in cinterface.cpp next to
+  `chimera_render_enabled` and ECL_INVISIBLE for the same reason - it is a fact
+  about what the HOST just did, not about the machine, so no state may carry it
+  or put a stale one back. PCSX2 used an ordinary static and relies on the flag
+  being set AFTER the load; invisible memory gets there by construction.
+
+  Two alternatives are wrong and were not tried again here: recording the id
+  during Init puts it in the SEALED baseline, where no state carries it as a
+  delta, which breaks the cross-session rebuild this function exists for; and a
+  non-zero "never seen" sentinel fails identically, because the anchor carries
+  whatever the static's initial value is.
+
+  **Measured, not reasoned.** `chimera-run --gpu --greenzone 4096 --rewind-loop
+  0,1` on triangle.elf under `CHIMERA_GL_TRACE=1 CHIMERA_GL_STATEAUDIT=1`,
+  counting the calls that cross the bridge on the drawing frame:
+
+  | | before | after |
+  |---|---|---|
+  | the drawing frame after restoring the frame-0 anchor | **203 - no rebuild** | 537 |
+  | the same frame in a run with no restore at all | 203 | 203 |
+  | the renderer's own "rebuilding" line after the restore | absent | present |
+
+  The leg is `gl:rebuild-at-zero`. NEGATIVE CONTROL: run against the package
+  built before this change it FAILS - "restoring the frame-0 anchor made 203 GL
+  calls on the drawing frame, against 203 with no restore at all, and the
+  renderer never said it was rebuilding" - and passes after. Gate 46 ok, 0
+  failed, 4 skipped (the three arcade legs and triangle's turbo).
+
+  **WHAT THE LEG DOES NOT STAND IN FOR** (docs/gates.md, E). PCSX2's leg asserts
+  that a restore to frame 0 AND a restore to frame 2 both rebuild, because the
+  difference between them was the bug. That half cannot be measured here:
+  triangle.elf renders on exactly ONE frame of its life and then spins, so a
+  restore to frame 1 or 2 replays without ever drawing again, this core's check
+  runs only when the renderer is about to draw, and the count is 35 calls with
+  the bug and without it. Only a restore whose replay reaches the drawing frame
+  - the anchor - says anything at all. The control used instead is the same
+  drawing frame with no restore in front of it, which is also the assertion that
+  a fresh boot must not rebuild. What would settle the other half is a test
+  program that renders every frame, which this repository does not have.
+
+  And llvmpipe is not a driver: what is established is that the rebuild RUNS,
+  not that a real game's picture is right on real hardware. No wrong picture was
+  ever seen here - what connects the fix to the report is that it is the one
+  thing that differs between the frames the reporter says are broken and the
+  frame they say is not.
+
 - **2026-09-20** The SH4 recompiler: what `cpu=jit` actually does, and what it
   does not. The setting has said since the machine ran that jit "on Windows
   corrupts guest memory and takes the machine down after a couple of hundred
