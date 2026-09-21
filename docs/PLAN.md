@@ -1232,6 +1232,54 @@ Chimera's firmware channel once the machine runs.
   how the guest is presented to Windows once the enabling condition is named.
   Neither ships without the condition.
 
+  **The fix candidate, proved on this core alone** (2026-09-21, ninth pass,
+  miniBox at 823639c - the reproduction is unchanged on it: same frame, same
+  first symptom, same wrong machine). A second guest build of this core with
+  `-mno-red-zone` added to `c_args` and `cpp_args` - a copy of the cross file
+  (`build/guest-cross.ini` -> `build/guest-cross-nrz.ini`) and a second build
+  directory (`meson setup build/meson-guest-nrz --cross-file
+  build/guest-cross-nrz.ini -Dminibox_dir=... -Dmesa_guest_dir=...`), the
+  shared toolchain untouched - is, over the full 1000 frames on Windows,
+  BYTE-IDENTICAL to Linux with epochs on, byte-identical with epochs off, and
+  the same guest on Linux is byte-identical to the original guest's Linux
+  reference (so the flag changed the code, not the machine). The unflagged
+  guest still parts at 137 on the same host build. `LzmaDec_DecodeReal2` now
+  opens with `sub $0x78,%rsp` and keeps nothing below rsp; the binary's
+  negative-rsp instructions fell from 3746 to 2312.
+
+  What took the flag: every object meson-guest compiles - the core, its deps,
+  libchdr and its `lzma-24.05` (the known victim), zstd (`HUF_decompress*`,
+  gone from the census). What did not, because it is linked from archives:
+  musl (`libc.a`), `libstdc++.a`, `libgcc`/`libgcc_eh`, miniBox's prebuilt
+  `emulibc.c.o`, and the mesa guest archives (`libmesa_util.a`,
+  `libgallium.a`, `libsoftpipe.a`, ...) - those own the 2312 that remain
+  (`encodedxtcolorblockfaster`, `util_format_*`, `SHA1Transform`, Granite's
+  ASTC tables). Any of them can still meet the same fault in a leaf; the
+  1000-frame result says this game does not reach one in that window, not
+  that none exists.
+
+  The recompiler needs no change: `rec_x64.cpp` touches rsp only to reserve
+  `STACK_ALIGN` around calls and to park it in `jmp_rsp`; nothing generated
+  lives below rsp, and `xbyak_base.h`/`x64_regalloc.h` do not use rsp at all.
+
+  **The enabling condition: two leads, both negative, measured, and stopped
+  here as agreed.** (1) The interop blob presents the guest thread to Windows
+  with `StackBase = -1`, `StackLimit = 0` for the whole guest run (its entry
+  path, at blob offset 0x23b). Patched at runtime to install the guest stack's
+  real bounds (`0x36f05723000..0x36f05823000`; verified from inside the first
+  guest fault, where the TEB then reads exactly that), the original guest runs
+  1000 frames healthy and still parts at 137. (2) A plain Windows process
+  carrying the guest's FS base (`wrfsbase 0x36f01dc0a38`) across each
+  exception, distinct value per leg, keeps every byte below rsp. Whatever
+  enables the rewrite in this process is neither of those two things on their
+  own; the knob for (1) is saved with the instruments (`teb-real-stack-knob.patch`).
+
+  Still worth knowing, for whoever picks this up: the blob's `-1/0` TEB bounds
+  are a fact about how every guest thread is presented to Windows, and
+  ntdll's dispatch demonstrably reads them (setting them to a range that
+  excludes the live rsp made ntdll walk pages toward it and fall off the
+  block). It did not explain this bug; it may explain something else.
+
   Still unexplained, and deliberately not smoothed over: frames 173 and 179 are
   NOT busy frames - they sit in a region making one syscall each - so "the next
   busy frame" explains 137 and does not explain the rest of the event table.
