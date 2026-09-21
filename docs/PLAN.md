@@ -893,6 +893,47 @@ Chimera's firmware channel once the machine runs.
   `d9de49d`; it is a probed-build artefact and is recorded here only so nobody
   mistakes it for the bug.)
 
+  **What frame 137 IS, and why it is stable** (2026-09-21, third pass). Nobody
+  had asked. Counting the guest's syscalls and the host's faults per frame:
+  186 of the first 200 frames make exactly ONE syscall each. Frame 137 makes
+  **599, with 1,795 faults** - by a wide margin the busiest frame in the run,
+  the game's big load burst, with 136 and 138 (231 and 224 syscalls) its
+  shoulders. So frame 137 is not a mysterious index: it is where the emulated
+  machine does the most host-visible work, and it does not move when the guest
+  binary moves because the DREAMCAST's timeline does not move. The stability of
+  the frame is therefore a weak constraint, not a strong one - it does not imply
+  the bug is indexed by anything address-independent.
+
+  **And the implicated page DOES move with the build, by exactly the right
+  amount.** A guest rebuilt with 64 KB of extra .bss puts its brk base 16 pages
+  higher (the ELF's last PT_LOAD moves by 0x10000; sbrk sits 512 pages past the
+  aligned ELF end). On that binary:
+
+  - Windows epochs off still equals Linux epochs off, so the padded machine is
+    self-consistent.
+  - Windows with the full epoch machinery still diverges at frame 137.
+  - Holding ONLY the old page 22914 now changes NOTHING.
+  - Holding ONLY page 22930 - 22914 plus the 16-page shift - diverges at 137.
+
+  Both are 95 pages (389,120 bytes) into the brk heap, the same offset in the
+  same allocation sequence. So the page is identified by the OBJECT living
+  there, not by its index, and the region bisect was pointing at a heap
+  allocation that the load burst uses - consistent with the retracted LZMA
+  reading being a surfacing rather than a cause.
+
+  **It is not a race, in this reproduction.** Worth stating because the
+  signature invited it. miniBox creates no threads of its own; `run-wbx` never
+  calls `wbx_state_plan`, so the background state copier - the one thing in the
+  epoch design that deliberately overlaps with the guest - never runs here. And
+  the Windows handler was instrumented to answer directly rather than by
+  argument: over a 200-frame run, the maximum number of handlers active at once
+  was ONE, entries while another was active were ZERO, and exactly ONE thread
+  ever entered it. That closes it for `run-wbx --epoch`. It does NOT close it
+  for the frontend, which has GPU driver threads, the greenzone helper threads
+  and the background copier that this reproduction has none of - and the Windows
+  VEH has no re-entrancy guard where the Linux handler blocks SIGSEGV and counts
+  depth, which is a real asymmetry waiting for a subject with threads.
+
   **Do not read "the interpreter is fine" as "the interpreter is safe."** The
   caveat as it stands: it may only mean the interpreter's Dreamcast never
   reaches the fragile moment in the frames tested. The implicated code - the
