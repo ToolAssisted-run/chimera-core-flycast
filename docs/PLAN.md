@@ -934,6 +934,43 @@ Chimera's firmware channel once the machine runs.
   VEH has no re-entrancy guard where the Linux handler blocks SIGSEGV and counts
   depth, which is a real asymmetry waiting for a subject with threads.
 
+  **THE SHARPEST FACT, and where to start** (2026-09-21, final pass). Every
+  perturbation up to here held a page, which does TWO things: it calls
+  `VirtualProtect`, and it causes a fault to be taken. Separating them settles
+  which one matters. Protect a page read-only and put it straight back in the
+  same epoch, through the same `mb_pal_protect` a hold uses, so the guest never
+  faults on it:
+
+  | perturbation | protect pairs | extra faults | machine |
+  |---|---|---|---|
+  | nothing | 0 | 0 | matches Linux |
+  | HOLD page 22914, one epoch | 0 | **4** | **diverges at 137** |
+  | PROTECT-ONLY page 22914, one epoch | 1 | 0 | matches Linux |
+  | PROTECT-ONLY pages 22883-22947, every epoch | 12,800 | 0 | matches Linux |
+  | PROTECT-ONLY every page, every epoch | **12,266,611** | 0 | matches Linux |
+
+  Twenty-four and a half million `VirtualProtect` calls change nothing. Four
+  extra FAULTS change the machine. **`VirtualProtect` is exonerated and the
+  fault delivery is necessary** - so the channel is something the FAULT does,
+  and the search space is that and nothing else. (The counts are printed by the
+  instrument: an earlier timing-based check of the same thing wrongly said the
+  knob was inert, because the timing run was missing `--epoch`. Hazard H again,
+  caught by its own rule.)
+
+  x87 is closed too, on the real subject: across 160,000 real faults the
+  control/status/tag words changed in ZERO, ST0-ST7 in ZERO, FIP/FDP in ZERO.
+
+  **The open question, in one sentence: on Windows, what does the DELIVERY of
+  an access violation to guest code change, that Linux's signal delivery does
+  not, given that guest memory (visible, invisible, free, freshly committed),
+  the whole register file including ymm/x87/MXCSR/eflags, the guest's syscall
+  results and the bytes delivered to its reads are all identical across the
+  perturbation?**
+
+  Still unexplained, and deliberately not smoothed over: frames 173 and 179 are
+  NOT busy frames - they sit in a region making one syscall each - so "the next
+  busy frame" explains 137 and does not explain the rest of the event table.
+
   **Do not read "the interpreter is fine" as "the interpreter is safe."** The
   caveat as it stands: it may only mean the interpreter's Dreamcast never
   reaches the fragile moment in the frames tested. The implicated code - the
