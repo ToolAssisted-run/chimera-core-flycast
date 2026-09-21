@@ -541,6 +541,65 @@ print("%dx%d" % struct.unpack("<HH", d[12:16]))' "$work/gfx.$1.tga" 2>/dev/null
 	fi
 fi
 
+# ---- transparent sorting: the picture, and only the picture, on a game ------
+# transparentSorting (chimera issue 122) is the third renderer-only setting,
+# declared on the same promise as the two above: it changes how Flycast's
+# OpenGL renderer orders translucent polygons and nothing whatever else. It
+# cannot be witnessed on triangle.elf - one opaque polygon has nothing to sort -
+# so this leg wants a real Dreamcast disc, named by FLYCAST_GFX_DISC (a .chd,
+# .gdi, .cdi or .cue), and SKIPs without one, which is what CI does; docs/PLAN.md
+# records what it said on the machine that had the disc (docs/gates.md, A).
+#
+# Both halves again: the same disc, the same frames, both orders - the four
+# memory domains, the audio and the lag count must come out byte for byte
+# identical (the machine half, the half the package's promise rests on), and
+# the two runs must draw DIFFERENT pictures (the half that proves the setting
+# reached the renderer at all; watched red with the assignment in
+# cinterface.cpp removed). Both runs draw at 2x so that a build without the
+# guest Mesa, where 'opengl' falls back to the rasteriser and both orders are
+# the same picture, is told apart by its 640x480 frame and SKIPs instead of
+# failing. Re-Volt needs about 1800 frames to reach the first screen that
+# blends anything; FLYCAST_GFX_FRAMES moves it for another disc.
+if [ -z "${FLYCAST_GFX_DISC:-}" ]; then
+	report "picture:transparentSorting" SKIP "set FLYCAST_GFX_DISC to a Dreamcast disc: would prove the sorting order changes the picture and nothing else"
+elif [ ! -f "$FLYCAST_GFX_DISC" ]; then
+	report "picture:transparentSorting" SKIP "FLYCAST_GFX_DISC=$FLYCAST_GFX_DISC is not a file"
+else
+	srt="$work/sorting"
+	mkdir -p "$srt"
+	gfxdisc="$(basename "$FLYCAST_GFX_DISC")"
+	ln -s "$(cd "$(dirname "$FLYCAST_GFX_DISC")" && pwd)/$gfxdisc" "$srt/$gfxdisc"
+	# a .gdi or .cue names its tracks beside it
+	for t in "$(dirname "$FLYCAST_GFX_DISC")"/*.bin "$(dirname "$FLYCAST_GFX_DISC")"/*.raw; do
+		[ -f "$t" ] && ln -s "$(cd "$(dirname "$t")" && pwd)/$(basename "$t")" "$srt/$(basename "$t")" 2>/dev/null
+	done
+	printf '{"disc":["%s"]}' "$gfxdisc" > "$srt/slots"
+	sortFrames=${FLYCAST_GFX_FRAMES:-1800}
+	sortRun() {
+		printf '%s' "$2" > "$srt/settings"
+		"$nat/run-wbx" "$gst/core.wbx" "$srt" --frames "$sortFrames" \
+			--screenshot "$work/sort.$1.tga" 2>"$work/sort.$1.err" > "$work/sort.$1.txt"
+		grep -E '^(frames|vsync|audioHash|audioFrames|lagFrames|domain\[)' "$work/sort.$1.txt" > "$work/sort.$1.machine"
+		sed -n 's/^videoHash=//p' "$work/sort.$1.txt"
+	}
+	tri="$(sortRun perTriangle '{"renderer":"opengl","cpu":"jit","internalResolution":"2x"}')"
+	strip="$(sortRun perStrip '{"renderer":"opengl","cpu":"jit","internalResolution":"2x","transparentSorting":"perStrip"}')"
+	sortSize="$(python3 -c 'import struct,sys
+d = open(sys.argv[1], "rb").read()
+print("%dx%d" % struct.unpack("<HH", d[12:16]))' "$work/sort.perTriangle.tga" 2>/dev/null)"
+	if [ ! -s "$work/sort.perTriangle.machine" ] || [ -z "$tri" ]; then
+		report "picture:transparentSorting" FAIL "the per-triangle run produced no digests: $(grep -v '^\s*$' "$work/sort.perTriangle.err" | tail -1 | cut -c1-100)"
+	elif [ "$sortSize" = "640x480" ]; then
+		report "picture:transparentSorting" SKIP "built without -Dmesa_guest_dir; the OpenGL renderer this setting steers is not in this core"
+	elif ! cmp -s "$work/sort.perTriangle.machine" "$work/sort.perStrip.machine"; then
+		report "picture:transparentSorting" FAIL "perStrip changed the machine: $(diff "$work/sort.perTriangle.machine" "$work/sort.perStrip.machine" | tr '\n' ' ' | head -c 120)"
+	elif [ "$tri" = "$strip" ]; then
+		report "picture:transparentSorting" FAIL "both orders drew the same picture over $sortFrames frames of $gfxdisc: the setting never reached the renderer"
+	else
+		report "picture:transparentSorting" PASS "$sortFrames frames of $gfxdisc: one machine, two pictures"
+	fi
+fi
+
 # ---- the disc --------------------------------------------------------------
 # A GD-ROM this repository builds from scratch (tests/make-testdisc.py): three
 # tracks, an ISO9660 filesystem at LBA 45000, an IP.BIN bootstrap naming

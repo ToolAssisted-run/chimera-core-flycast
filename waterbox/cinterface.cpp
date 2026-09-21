@@ -905,6 +905,17 @@ ECL_EXPORT int Init(void)
 			 * reads them in (core/cfg/option.h), and the order declared */
 			static const char *const filters[] = { "machine", "nearest", "linear" };
 			config::TextureFiltering = SettingIndex("textureFiltering", filters, 3, 0);
+
+			/* How translucent polygons are ordered before they are blended.
+			 * The PVR sorts them per PIXEL, in hardware; a GL renderer cannot,
+			 * so Flycast sorts either every triangle (upstream's default) or
+			 * whole strips (cheaper, and what a few games look right under).
+			 * A sorting decision reaches video memory the same way the filter
+			 * does - only through a render-to-texture pass copied back - so
+			 * the same caveat is in its declaration. The reference rasteriser
+			 * sorts per pixel like the PVR and ignores this. */
+			static const char *const sorting[] = { "perTriangle", "perStrip" };
+			config::PerStripSorting = SettingIndex("transparentSorting", sorting, 2, 0) == 1;
 		}
 #endif
 

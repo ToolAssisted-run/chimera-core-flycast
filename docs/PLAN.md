@@ -511,6 +511,50 @@ Chimera's firmware channel once the machine runs.
 
 ## Log
 
+- **2026-09-21** Transparent sorting is the third renderer-only setting
+  (chimera issue #122), classified by measurement before it was declared.
+
+  `transparentSorting` (perTriangle / perStrip) is `config::PerStripSorting`:
+  how Flycast's OpenGL renderer orders translucent polygons before blending,
+  triangle by triangle (upstream's default) or strip by strip. The reference
+  rasteriser sorts per pixel like the PVR and ignores it (ta_vtx.cpp,
+  `parseRenderPass`: the per-pixel path never consults it).
+
+  The measurement, Re-Volt (USA).chd, the OpenGL renderer in the sandbox (the
+  guest Mesa softpipe; this run-wbx has no bridge host half), `cpu: jit`:
+
+  | run | frames | System RAM | VRAM | Sound RAM | Flash | audio | lag | videoHash |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | perTriangle A | 1800 | 7d576e50469984be | 9d5180e88fa16c94 | e91624c21e3419d0 | a27918a3b14bed79 | 9c83f52e7dffa9d5 | 138 | 76091079cb647c9e |
+  | perTriangle B | 1800 | same | same | same | same | same | 138 | same |
+  | perStrip | 1800 | same | same | same | same | same | 138 | 8ab8b7f8c72d103f |
+  | perTriangle | 600 | - | - | - | - | - | - | 2213032f4c5801cf |
+  | perStrip | 600 | identical to perTriangle in every line | | | | | | 2213032f4c5801cf |
+
+  Two identical runs agree (docs/gates.md, H: the instrument against itself
+  before the two configurations), the order changes the whole-run picture hash
+  and the last frame's, and every memory domain, the audio and the lag count
+  are byte for byte the same. At 600 frames the disc is still on its licence
+  screens and blends nothing, which is why the leg below runs 1800.
+
+  So it is a picture setting in the same sense as `internalResolution` and
+  `textureFiltering`: the frontend cannot do it (it is a decision inside
+  Flycast's renderer), a value reaches a core only as a declared setting, so
+  the project pins it and the movie cites it; and the same caveat applies -
+  on a game whose render-to-texture pass is copied back into video memory the
+  reordered pixels are pixels the game reads. The declaration says all of
+  that.
+
+  The gate leg `picture:transparentSorting` runs a disc named by
+  `FLYCAST_GFX_DISC` at both orders (1800 frames, `FLYCAST_GFX_FRAMES`), at 2x
+  so a rasteriser fallback is told apart by its 640x480 frame, and requires the
+  machine identical and the pictures different. It SKIPs without a disc (CI),
+  which is the arcade legs' pattern. Watched red with the assignment in
+  cinterface.cpp removed: both orders drew 76091079cb647c9e. What it does NOT
+  stand in for (docs/gates.md, E): a test program that blends. triangle.elf
+  draws one opaque polygon, so this is the one setting here whose picture half
+  needs somebody's disc.
+
 - **2026-09-21** A stored context id of ZERO was read as "nothing to rebuild",
   and the frame-0 anchor is the one state that carries it (chimera issue #126).
 
