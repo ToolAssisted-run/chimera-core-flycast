@@ -1280,6 +1280,48 @@ Chimera's firmware channel once the machine runs.
   excludes the live rsp made ntdll walk pages toward it and fall off the
   block). It did not explain this bug; it may explain something else.
 
+  **SHIPPED (2026-09-21, tenth pass): cpu=jit is no longer Linux-only.** Sergio
+  took the toolchain fix rather than the per-core one, so it lands in miniBox's
+  shared guest toolchain and sysroot, not in this repository: `-mno-red-zone`
+  in the `*cc1` entry of the musl-gcc specs that every core's guest compile
+  passes through, in musl's own CFLAGS and the libstdc++ build flags, and in
+  the exported guest cflags and cross-file template. Two hand-written waterbox
+  routines that used the red zone on purpose were changed to push a scratch
+  word (`fenv.s`, `exp2l.s`). miniBox `check-wbx.sh` - which this repository's
+  `build-package.sh` already runs on `core.wbx` - now refuses any guest image
+  that keeps something below rsp. See miniBox `docs/RED-ZONE.md`.
+
+  On the fully flagged guest (core, sysroot and the mesa archives), 1000
+  frames of Prince of Persia: Arabian Nights with `cpu=jit`:
+
+  | run | result |
+  |---|---|
+  | Windows, greenzone ON | byte-identical to Linux |
+  | Windows, greenzone off | byte-identical to Linux |
+  | Linux, flagged vs unflagged reference | byte-identical - the machine does not depend on frame layout |
+  | Windows, UNFLAGGED guest, greenzone ON (control) | still parts at frame 137 |
+
+  The cost is not measurable here: 1000 frames three times each, unflagged
+  55.64 / 55.67 / 55.50 s against flagged 55.59 / 55.33 / 55.91 s, means 0.01 s
+  apart and inside either spread. The image grew 92 KB on 94 MB.
+
+  **What this does and does not license.** It is proved on ONE game for 1000
+  frames, on this machine, with the software renderer. The arcade legs, the
+  disc collection and the GPU renderer have NOT been re-run on the flagged
+  build - that is the gate's job on the next full run, and until then "jit
+  works on Windows" is a claim about Prince of Persia and not about the core.
+  The mechanism itself is unchanged and still only half explained: the flag
+  removes the exposure (guest code no longer keeps anything below rsp), it
+  does not name the component that rewrites those bytes or the condition that
+  enables it. Anyone resuming that hunt starts from the two instrument patches
+  named above.
+
+  Also repaired on the way, because rebuilding the guest exposed it: the mesa
+  guest archives could not be built from a clean configure at all - musl ships
+  no kernel uapi headers, and mesa's pkg-config was finding the host's libdrm.
+  Both are fixed in `waterbox/setup-mesa.sh`; neither is related to the red
+  zone, and both were latent for as long as the old archives were reused.
+
   Still unexplained, and deliberately not smoothed over: frames 173 and 179 are
   NOT busy frames - they sit in a region making one syscall each - so "the next
   busy frame" explains 137 and does not explain the rest of the event table.
