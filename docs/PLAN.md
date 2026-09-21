@@ -967,6 +967,53 @@ Chimera's firmware channel once the machine runs.
   results and the bytes delivered to its reads are all identical across the
   perturbation?**
 
+  **The JIT-stack hypothesis, tested and dead** (2026-09-21, fifth pass). If
+  Windows builds its exception frame on the guest's stack and the RECOMPILER's
+  emitted code keeps live data below its own %rsp - which no ABI forbids a JIT,
+  and which is safe on Linux only because sigaltstack puts the signal frame in
+  host memory - that would explain every fact at once. It is wrong. Aligning the
+  two runs' fault streams BY CONTENT, the extra fault is at
+  `rip = LzmaDec_DecodeReal2`: statically compiled GCC code, SysV-ABI-bound,
+  whose only claim below %rsp is the 128-byte red zone against a measured
+  376-byte minimum margin. Over the whole run 120,789 faults are in static guest
+  code, 63 in host code, and EXACTLY ONE is in the JIT code cache
+  (`_ZL7SH4_TCB`, 0x36f00176000 + 0xb00000). The recompiler is downstream of
+  this, not upstream.
+
+  **How the perturbation actually works, which nothing had established.** A page
+  held for an epoch but never written that epoch keeps `epoch_hold` set FOREVER:
+  `epoch_forget` clears the flag only for pages in `epoch_bits`, and a page
+  nobody wrote is not in it. So holding page 22914 at epoch 2 does not cost a
+  fault at epoch 2 - it holds the page read-only for 136 frames until the load
+  burst finally writes it, at fault 119,611. That is why a hold at frame 1 and a
+  hold at frame 137 give identical traces, and why the divergence lands on "the
+  next event frame": the event frame is simply the next frame that WRITES THAT
+  PAGE. Worth raising in miniBox on its own account - a dirty page reading as
+  `clean` indefinitely is a correctness smell even where it is currently benign.
+
+  **The best instrument found, and the negative it withdrew.** Diffing the two
+  runs' fault streams - (rip, fault address), two numbers a fault, no hashing -
+  and aligning them with a sequence matcher rather than by ordinal is the
+  cheapest useful sampling of guest execution here. It shows the streams
+  IDENTICAL for 119,611 faults, the first difference being the extra fault
+  itself, and guest execution genuinely parting six faults later (malloc walking
+  a different address). It also invalidated an earlier claim: the "visible arena
+  is identical after every fault of the diverging frame" comparison walked FAULT
+  ORDINALS, and the two runs differ by three faults inside that very epoch, so
+  from the first inserted fault it was comparing different points in the two
+  executions. WITHDRAWN. Re-done with content alignment, what stands is
+  narrower and sound: memory is identical (outside the dead stack) at every
+  aligned checkpoint up to and including fault 119,610, the last common fault
+  before the extra one.
+
+  Beyond that point this instrument cannot speak, and a reading that it could
+  is also withdrawn: at fault ordinals past the extra fault, two runs of the
+  SAME perturbed configuration differ in 38 pages, so the ordinal is not a
+  stable execution coordinate there. The reason is visible in the census - 63
+  of the faults are taken by HOST code, whose page crossings depend on host
+  buffer addresses and therefore on ASLR. Anyone continuing should count only
+  faults whose rip is inside the guest.
+
   Still unexplained, and deliberately not smoothed over: frames 173 and 179 are
   NOT busy frames - they sit in a region making one syscall each - so "the next
   busy frame" explains 137 and does not explain the rest of the event table.
