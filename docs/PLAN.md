@@ -1014,6 +1014,50 @@ Chimera's firmware channel once the machine runs.
   buffer addresses and therefore on ASLR. Anyone continuing should count only
   faults whose rip is inside the guest.
 
+  **RETRACTED: the "one page, one epoch" minimal perturbation, and everything
+  built on it** (2026-09-21, sixth pass). The knob used for it suppressed
+  `epoch_hold`, but `mb_block_epoch_begin` builds its protection runs and calls
+  `refresh_range` OUTSIDE that gate. Checked directly: with the knob suppressing
+  EVERY hold, the machine still diverges at frame 137, and the held and unheld
+  runs are byte-identical to each other. So the holds were never the
+  perturbation being measured. Withdrawn with it: "holding one page for one
+  epoch is enough", the hold-epoch-to-divergence-frame table (137/173/179), and
+  the reading that a stuck `epoch_hold` explained that table. The sticky-flag
+  observation itself stands as code reading - `epoch_forget` clears the flag
+  only for pages in `epoch_bits`, so a page held and never written keeps it -
+  and is still worth raising in miniBox; what is withdrawn is the claim that it
+  explained this bug.
+
+  What that leaves is narrower but sound, because it compares the full epoch
+  machinery against no epochs at all:
+
+  - `wbx_epoch_begin` ALONE - no page held, no `wbx_save_delta`, no shadow
+    copies - still diverges at frame 137.
+  - Every hunk that BOTH runs decompress produces byte-identical output, hashed
+    at the decompress call boundary. The decompressor is exonerated at a
+    guest-defined coordinate; the epoch run simply stops asking for some hunks.
+  - Using the guest's own disc requests as coordinates, with a noise floor of
+    ZERO pages, memory is identical at the entry to guest syscall 664 and
+    differs in FIVE pages at the entry to syscall 665 - and syscalls 664 and 665
+    are `clock_gettime` and `brk`, identical in both runs. The enclosing window
+    of 1,107 syscalls is identical throughout, in order, arguments and results.
+  - The first differing bytes are EIGHT: the epoch run writes
+    `(0x0000c0b0, 0x00000300)` where the clean run leaves zeros, while both
+    runs write the neighbouring fields identically. The shape matches the head
+    of a `shil_opcode` (`{shilop op; u32 size;}`), though that identification is
+    by layout only and is not proved. The pages carrying it are written by
+    musl's `malloc`, `__bin_chunk` and `alloc_rev`, and by `bm_ResetCache()`.
+
+  Two mechanisms were tested and closed this round. An overlapping,
+  page-straddling copy that faults in the middle - what LZ77 does for a short
+  match distance, and the one shape a restart is NOT idempotent under if a store
+  can partially commit - is byte-exact on both hosts across six copy shapes,
+  eleven overlap deltas and five lengths, with 396 mid-copy faults counted to
+  prove the probe fires. And both hosts' handlers RESTART the faulting
+  instruction identically: neither emulates the store, advances rip or
+  single-steps, and the only six places either handler touches the interrupted
+  context are the guest-death escape.
+
   Still unexplained, and deliberately not smoothed over: frames 173 and 179 are
   NOT busy frames - they sit in a region making one syscall each - so "the next
   busy frame" explains 137 and does not explain the rest of the event table.
