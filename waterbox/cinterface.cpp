@@ -56,6 +56,7 @@ bool chimera_gl_available() { return g_glUp; }
 #endif
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_if.h"
+#include "imgread/common.h"   /* gdr::openLid, gdr::insertDisk - the lid */
 #include "hw/mem/addrspace.h"
 #include "hw/sh4/sh4_mem.h"
 #include "hw/aica/aica_if.h"
@@ -139,8 +140,34 @@ enum {
 	BTN_PER_PORT
 };
 #define BTN_COUNT (BTN_PER_PORT * DC_PORTS)
-static uint8_t g_setButtons[BTN_COUNT];
-static uint8_t g_buttons[BTN_COUNT];
+
+/* One more button that belongs to no port: the GD-ROM lid.
+ *
+ * A game on several discs asks for the next one, and the machine has a way to
+ * answer - the lid. Flycast exposes it as gdr::openLid() and
+ * gdr::insertDisk(), the second leaving the drive GD_BUSY for a second of SH4
+ * time while it spins up, which is what the game watches for.
+ *
+ * It is a BUTTON and not a frontend menu action because which disc is in the
+ * drive is part of the machine: a movie that swaps at frame 40,000 has to swap
+ * there on replay, and only an input is recorded. Held = lid open. Releasing
+ * it closes the lid on the NEXT disc in the slot, which is the same gesture as
+ * the hardware: you hold the lid up while you change the disc, and the machine
+ * notices when it shuts.
+ *
+ * It sits after the four ports so every controller index a movie already
+ * recorded keeps its number. */
+#define BTN_DISC_SWAP (BTN_PER_PORT * DC_PORTS)
+#define BTN_TOTAL (BTN_DISC_SWAP + 1)
+static uint8_t g_setButtons[BTN_TOTAL];
+static uint8_t g_buttons[BTN_TOTAL];
+static void ServiceDiscSwap();
+
+/* Every disc the project gave, in the order it gave them. The first is the one
+ * the machine booted; the lid moves through the rest and wraps. */
+static std::vector<std::string> g_discs;
+static size_t g_discIndex = 0;
+static uint8_t g_lidWasOpen = 0;
 
 /* the analog wire, per port. Started at the NEUTRAL each axis declares in
  * waterbox.config, not at zero: a trigger's neutral is -32768 (released) and
@@ -751,7 +778,20 @@ ECL_EXPORT int Init(void)
 		}
 	}
 	else if (wbx_slot_count("disc") > 0 && wbx_slot_name("disc", 0, name, sizeof(name)) != nullptr)
+	{
 		file = name;
+		/* the rest of them, for the lid: a game on several discs gave them
+		 * all, in order, and the first is the one that boots */
+		g_discs.clear();
+		g_discIndex = 0;
+		const int discCount = wbx_slot_count("disc");
+		for (int i = 0; i < discCount; i++)
+		{
+			char each[512];
+			if (wbx_slot_name("disc", i, each, sizeof(each)) != nullptr)
+				g_discs.push_back(each);
+		}
+	}
 
 	/* Where Flycast looks for the things a machine is made of. The sandbox
 	 * mounts whatever the project supplies at the root of the guest's file
@@ -957,7 +997,7 @@ ECL_EXPORT int Init(void)
 
 ECL_EXPORT void SetButton(int index, int value)
 {
-	if (index >= 0 && index < BTN_COUNT) g_setButtons[index] = value ? 1 : 0;
+	if (index >= 0 && index < BTN_TOTAL) g_setButtons[index] = value ? 1 : 0;
 }
 
 /* WHICH DECLARED CONTROLS THIS MACHINE HAS.
@@ -1056,8 +1096,10 @@ ECL_EXPORT void FrameAdvance(uint64_t packed)
 	 * undefined, not zero, so the packed channel stops where it runs out and
 	 * the rest of the wire is SetButton's alone - which is what Chimera uses
 	 * for a controller this wide anyway. */
-	for (int i = 0; i < BTN_COUNT; i++)
+	for (int i = 0; i < BTN_TOTAL; i++)
 		g_buttons[i] = g_setButtons[i] || (i < 64 && ((packed >> i) & 1));
+
+	ServiceDiscSwap();
 
 	g_inputRead = 0;
 	g_nsamples = 0;
@@ -1066,6 +1108,59 @@ ECL_EXPORT void FrameAdvance(uint64_t packed)
 	if (g_loaded)
 		emu.run();
 }
+
+/* ---- the GD-ROM lid (BTN_DISC_SWAP) ----------------------------------- */
+/* Out of the extern "C" block the exports live in: this one is ours, it throws
+ * (insertDisk does), and C linkage on a function that catches is a lie. */
+}  /* extern "C" */
+
+
+/* Every disc the project gave, in the order it gave them. The first is the one
+ * the machine booted; the lid moves through the rest and wraps. */
+
+/* Act on the EDGES of the lid button, once a frame.
+ *
+ * Pressing opens the lid: the drive reports no disc, which is what a game
+ * waiting for the next one is looking for. Releasing closes it on the next
+ * disc, and insertDisk leaves the drive busy for a second of SH4 time while it
+ * spins up - the game sees a real swap, not bytes that changed underneath it.
+ *
+ * Doing both in one frame would be wrong: the guest polls the drive, and a lid
+ * that opened and shut between two polls never opened at all. Holding the
+ * button is how long the lid is up, which is the player's decision and so
+ * belongs in the movie. */
+static void ServiceDiscSwap()
+{
+	if (g_machine != MACHINE_DC || g_discs.size() < 2) return;
+
+	const uint8_t open = g_buttons[BTN_DISC_SWAP];
+	if (open == g_lidWasOpen) return;
+	g_lidWasOpen = open;
+
+	if (open)
+	{
+		gdr::openLid();
+		return;
+	}
+
+	g_discIndex = (g_discIndex + 1) % g_discs.size();
+	try
+	{
+		gdr::insertDisk(g_discs[g_discIndex]);
+	}
+	catch (const FlycastException &e)
+	{
+		/* The disc the project supplied will not load. Say so and leave the
+		 * lid open rather than pretending a disc went in: a machine that
+		 * believes it has one it cannot read is worse than one that knows it
+		 * is empty. */
+		WARN_LOG(GDROM, "disc %u (%s) will not load: %s",
+			(unsigned)g_discIndex, g_discs[g_discIndex].c_str(), e.what());
+		gdr::openLid();
+	}
+}
+
+extern "C" {
 
 /* The picture, from the software renderer (waterbox/refsw-renderer.cpp). A
  * frame the machine never rendered leaves the last one standing, which is what

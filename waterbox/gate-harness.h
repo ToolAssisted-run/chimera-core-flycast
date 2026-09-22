@@ -33,6 +33,9 @@
 #define GATE_AXIS_PER_PORT 11
 #define GATE_PORTS 4
 #define GATE_BTN_COUNT (GATE_BTN_PER_PORT * GATE_PORTS)
+/* One more that belongs to no port: the Dreamcast's GD-ROM lid, which the core
+ * declares after the four controllers (cinterface.cpp, BTN_DISC_SWAP). */
+#define GATE_BTN_TOTAL (GATE_BTN_COUNT + 1)
 
 /* how many scripted presses one run may carry (--press) */
 #define GATE_MAX_PRESSES 32
@@ -209,7 +212,7 @@ static int gate_parse_line(const char *line, const char *sys, const char *ctl1,
 	const char *ctl2, uint8_t *buttons)
 {
 	(void)sys;
-	memset(buttons, 0, GATE_BTN_COUNT);
+	memset(buttons, 0, GATE_BTN_TOTAL);
 	const char *s = line;
 	if (*s++ != '|') return 0;
 
@@ -293,8 +296,8 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 	const long hashFrom = tail + o->turboSettle;
 	uint64_t th = 0;
 	long lag = 0;
-	uint8_t buttons[GATE_BTN_COUNT];
-	uint8_t prev[GATE_BTN_COUNT];
+	uint8_t buttons[GATE_BTN_TOTAL];
+	uint8_t prev[GATE_BTN_TOTAL];
 	memset(prev, 0, sizeof prev);
 
 	/* A frame's LENGTH, frame by frame. The total says the machine made sound;
@@ -341,7 +344,7 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 		for (int pi = 0; pi < o->presses; pi++)
 		{
 			if (f >= o->press[pi].first && f < o->press[pi].first + o->press[pi].count
-				&& o->press[pi].index >= 0 && o->press[pi].index < GATE_BTN_COUNT)
+				&& o->press[pi].index >= 0 && o->press[pi].index < GATE_BTN_TOTAL)
 			{
 				buttons[o->press[pi].index] = 1;
 			}
@@ -392,7 +395,7 @@ static int gate_run(const struct gate_core *c, const struct gate_opts *o)
 		if (c->pre_frame)
 			c->pre_frame();
 
-		for (int i = 0; i < GATE_BTN_COUNT; i++)
+		for (int i = 0; i < GATE_BTN_TOTAL; i++)
 		{
 			if (buttons[i] != prev[i])
 				c->set_button(i, buttons[i]);

@@ -600,6 +600,48 @@ print("%dx%d" % struct.unpack("<HH", d[12:16]))' "$work/sort.perTriangle.tga" 2>
 	fi
 fi
 
+# ---- disc:swap -----------------------------------------------------------
+# A game on several discs asks for the next one, and until now the machine had
+# no way to answer: the disc slot took exactly one file and nothing could open
+# the lid. Flycast has the mechanism (gdr::openLid, gdr::insertDisk); this core
+# never reached it.
+#
+# The leg runs the SAME two-disc machine twice, once working the lid and once
+# not, and requires the machine to differ. That is the control built in: if the
+# button does nothing the two runs agree and the leg fails, which is exactly
+# what it did before the input existed. It does not compare against a stored
+# digest, which would pass the day somebody broke the drive instead.
+#
+# Two DIFFERENT discs stand in for one game's two, which is all the mechanism
+# needs: what is being asked is whether the guest sees the drive change.
+if [ -z "${FLYCAST_DISC2:-}" ] || [ -z "${FLYCAST_GFX_DISC:-}" ]; then
+	report "disc:swap" SKIP "set FLYCAST_GFX_DISC and FLYCAST_DISC2 to two Dreamcast discs: would prove the lid opens and the next disc goes in"
+elif [ ! -f "$FLYCAST_DISC2" ] || [ ! -f "$FLYCAST_GFX_DISC" ]; then
+	report "disc:swap" SKIP "one of FLYCAST_GFX_DISC / FLYCAST_DISC2 is not a file"
+else
+	swp="$work/discswap"
+	mkdir -p "$swp"
+	d1="$(basename "$FLYCAST_GFX_DISC")"; d2="$(basename "$FLYCAST_DISC2")"
+	ln -sf "$(cd "$(dirname "$FLYCAST_GFX_DISC")" && pwd)/$d1" "$swp/$d1"
+	ln -sf "$(cd "$(dirname "$FLYCAST_DISC2")" && pwd)/$d2" "$swp/$d2"
+	printf '{"disc":["%s","%s"]}' "$d1" "$d2" > "$swp/slots"
+	# wire index 80: after the four controllers, so no movie's numbering moved
+	swapRun() {
+		"$nat/run-wbx" "$gst/core.wbx" "$swp" --frames 600 $1 \
+			2>"$work/swap.$2.err" > "$work/swap.$2.txt"
+		grep -E '^domain\[' "$work/swap.$2.txt"
+	}
+	quiet_disc="$(swapRun "" quiet)"
+	swapped_disc="$(swapRun "--press 200:60:80" swapped)"
+	if [ -z "$quiet_disc" ]; then
+		report "disc:swap" FAIL "the two-disc machine produced no digests: $(tail -1 "$work/swap.quiet.err" | cut -c1-110)"
+	elif [ "$quiet_disc" = "$swapped_disc" ]; then
+		report "disc:swap" FAIL "working the lid changed nothing over 600 frames: the swap never reached the drive"
+	else
+		report "disc:swap" PASS "$d1 then $d2: opening the lid and closing it on the next disc changes the machine"
+	fi
+fi
+
 # ---- the disc --------------------------------------------------------------
 # A GD-ROM this repository builds from scratch (tests/make-testdisc.py): three
 # tracks, an ISO9660 filesystem at LBA 45000, an IP.BIN bootstrap naming
