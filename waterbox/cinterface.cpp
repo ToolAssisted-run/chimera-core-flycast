@@ -156,17 +156,34 @@ enum {
  * notices when it shuts.
  *
  * It sits after the four ports so every controller index a movie already
- * recorded keeps its number. */
+ * recorded keeps its number.
+ *
+ * WHICH disc it closes on is a SELECTOR, not a sequence. The lid alone could
+ * only ever go forward one at a time, so reaching disc three of four meant
+ * opening and shutting the lid twice, and a game that wants disc three sees
+ * disc two go in and come out again on the way. Previous and Next move the
+ * selector without touching the drive; the lid puts the selected disc in. That
+ * is the arrangement DOSBox-X and Opera already use, and it is the one issue
+ * #47 arrived at the hard way - a selector that only counted up walked off the
+ * end of the list and silently came back to the first disc forever.
+ *
+ * These two also go AFTER the lid, for the same reason the lid went after the
+ * ports: a movie that already recorded Disc Swap keeps its index. */
 #define BTN_DISC_SWAP (BTN_PER_PORT * DC_PORTS)
-#define BTN_TOTAL (BTN_DISC_SWAP + 1)
+#define BTN_DISC_PREV (BTN_DISC_SWAP + 1)
+#define BTN_DISC_NEXT (BTN_DISC_SWAP + 2)
+#define BTN_TOTAL (BTN_DISC_SWAP + 3)
 static uint8_t g_setButtons[BTN_TOTAL];
 static uint8_t g_buttons[BTN_TOTAL];
+static uint8_t g_prevButtons[BTN_TOTAL];
 static void ServiceDiscSwap();
 
 /* Every disc the project gave, in the order it gave them. The first is the one
- * the machine booted; the lid moves through the rest and wraps. */
+ * the machine booted. g_discIndex is what is IN the drive; g_discSelected is
+ * what the next close of the lid will put there. */
 static std::vector<std::string> g_discs;
 static size_t g_discIndex = 0;
+static size_t g_discSelected = 0;
 static uint8_t g_lidWasOpen = 0;
 
 /* the analog wire, per port. Started at the NEUTRAL each axis declares in
@@ -784,6 +801,7 @@ ECL_EXPORT int Init(void)
 		 * all, in order, and the first is the one that boots */
 		g_discs.clear();
 		g_discIndex = 0;
+		g_discSelected = 0;
 		const int discCount = wbx_slot_count("disc");
 		for (int i = 0; i < discCount; i++)
 		{
@@ -1034,6 +1052,20 @@ ECL_EXPORT int IsButtonActive(int index)
 	/* the arcade panel is the JVS board's whole wire; which of it a game
 	 * reads is the game's business, not something the machine can say */
 	if (IsArcade()) return index >= 0 && index < ARC_BTN_COUNT ? 1 : 0;
+
+	/* THE DRIVE'S CONTROLS BELONG TO NO PORT, and this is where they were lost:
+	 * the bound below was BTN_COUNT, which is the last PORT button, so
+	 * Disc Swap - declared, wired, serviced - answered "not on this machine"
+	 * for every machine and never appeared in a movie at all. The buttons
+	 * existed everywhere except where a person could press them.
+	 *
+	 * They are active exactly when there is something to swap. One disc is a
+	 * machine with no disc controls, which is most of them, and offering a
+	 * changer for a single disc would be three columns of nothing in every
+	 * movie ever recorded here. */
+	if (index == BTN_DISC_SWAP || index == BTN_DISC_PREV || index == BTN_DISC_NEXT)
+		return g_machine == MACHINE_DC && g_discs.size() >= 2 ? 1 : 0;
+
 	if (index < 0 || index >= BTN_COUNT) return 0;
 	const int port = index / BTN_PER_PORT;
 	const int wire = index % BTN_PER_PORT;
@@ -1100,6 +1132,8 @@ ECL_EXPORT void FrameAdvance(uint64_t packed)
 		g_buttons[i] = g_setButtons[i] || (i < 64 && ((packed >> i) & 1));
 
 	ServiceDiscSwap();
+	/* the edges the selector reads are against the PREVIOUS frame's levels */
+	memcpy(g_prevButtons, g_buttons, sizeof g_prevButtons);
 
 	g_inputRead = 0;
 	g_nsamples = 0;
@@ -1133,6 +1167,27 @@ static void ServiceDiscSwap()
 {
 	if (g_machine != MACHINE_DC || g_discs.size() < 2) return;
 
+	/* The selector moves on the PRESS and wraps in both directions. It touches
+	 * no hardware: choosing a disc is not putting one in, and a machine whose
+	 * drive reacted to the selector would be swapping discs nobody asked for.
+	 *
+	 * It wraps because the changer it stands for does - and because a selector
+	 * that runs off the end is exactly the bug issue #47 was: past the last
+	 * disc it read as "put the first one in", so on a two-disc machine a second
+	 * Next silently reinserted disc one and no arrangement of presses could
+	 * reach disc two again. */
+	const size_t count = g_discs.size();
+	const bool prev = g_buttons[BTN_DISC_PREV] && !g_prevButtons[BTN_DISC_PREV];
+	const bool next = g_buttons[BTN_DISC_NEXT] && !g_prevButtons[BTN_DISC_NEXT];
+	if (prev) g_discSelected = (g_discSelected + count - 1) % count;
+	if (next) g_discSelected = (g_discSelected + 1) % count;
+	/* Which disc is selected is otherwise invisible, and somebody who cannot
+	 * see it cannot tell a selector that moved from one that did not. */
+	if (prev || next)
+		NOTICE_LOG(GDROM, "disc selector: %u of %u (%s)",
+			(unsigned)(g_discSelected + 1), (unsigned)count,
+			g_discs[g_discSelected].c_str());
+
 	const uint8_t open = g_buttons[BTN_DISC_SWAP];
 	if (open == g_lidWasOpen) return;
 	g_lidWasOpen = open;
@@ -1143,7 +1198,11 @@ static void ServiceDiscSwap()
 		return;
 	}
 
-	g_discIndex = (g_discIndex + 1) % g_discs.size();
+	/* Closing the lid puts the SELECTED disc in. With the selector untouched
+	 * that is still the next one, so the lid on its own behaves as it always
+	 * did and a movie that only ever pressed Disc Swap replays unchanged. */
+	if (g_discSelected == g_discIndex) g_discSelected = (g_discIndex + 1) % count;
+	g_discIndex = g_discSelected;
 	try
 	{
 		gdr::insertDisk(g_discs[g_discIndex]);

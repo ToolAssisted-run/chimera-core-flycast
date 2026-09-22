@@ -13,7 +13,7 @@
 				"cue",
 				"elf"
 			],
-			"help": "The GD-ROM image. A .gdi index (with its track files beside it), a .cdi, a .chd, or a .cue - and a naked .elf, which the HLE bios boots straight from memory the way homebrew is usually tested. A game that spans several discs takes them all, in order: the first one boots, and the Disc Swap input changes them the way the lid does on the machine. Which disc is in the drive is part of the machine, so a movie records the swap rather than the frontend remembering it.",
+			"help": "The GD-ROM image. A .gdi index (with its track files beside it), a .cdi, a .chd, or a .cue - and a naked .elf, which the HLE bios boots straight from memory the way homebrew is usually tested. A game that spans several discs takes them all, in order: the first one boots, and the drive's inputs change them the way the lid does on the machine. Previous Disc and Next Disc move a selector through the list, wrapping at both ends; Disc Swap is the lid itself, and the disc that is selected goes in when it shuts. Which disc is in the drive is part of the machine, so a movie records the swap rather than the frontend remembering it.",
 			"exposedWhen": {
 				"setting": "machine",
 				"is": "dreamcast"

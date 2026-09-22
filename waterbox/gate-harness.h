@@ -33,9 +33,15 @@
 #define GATE_AXIS_PER_PORT 11
 #define GATE_PORTS 4
 #define GATE_BTN_COUNT (GATE_BTN_PER_PORT * GATE_PORTS)
-/* One more that belongs to no port: the Dreamcast's GD-ROM lid, which the core
- * declares after the four controllers (cinterface.cpp, BTN_DISC_SWAP). */
-#define GATE_BTN_TOTAL (GATE_BTN_COUNT + 1)
+/* THREE more that belong to no port: the Dreamcast's GD-ROM drive - the lid,
+ * and the selector that decides which disc the lid closes on - declared after
+ * the four controllers (cinterface.cpp, BTN_DISC_SWAP/PREV/NEXT).
+ *
+ * Count them all. A harness whose bound stops short of a real button drops
+ * --press for it silently, and the run then looks exactly like one where the
+ * feature is broken: the button was never pressed, so of course nothing
+ * happened. That cost an afternoon when this was +0 and the lid was index 80. */
+#define GATE_BTN_TOTAL (GATE_BTN_COUNT + 3)
 
 /* how many scripted presses one run may carry (--press) */
 #define GATE_MAX_PRESSES 32
