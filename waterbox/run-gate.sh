@@ -247,9 +247,10 @@ else
 fi
 
 # ---- the recompiler, and the one write nothing else sees --------------------
-# Every other leg in this gate runs the interpreter, because that is the `cpu`
-# default. This one runs the RECOMPILER, on the smallest program that can tell
-# the two apart.
+# Every other leg in this gate runs the RECOMPILER, because that is the `cpu`
+# default since 2026-09-22. This leg runs both, on the smallest program that
+# can tell them apart - and the interpreter half is what keeps the interpreter
+# from going untested now that it is no longer what everything else exercises.
 #
 # smc.elf calls a subroutine that returns 1, overwrites it through a store to a
 # CONSTANT address so that it returns 2, and calls it again. The store is the
@@ -597,6 +598,96 @@ print("%dx%d" % struct.unpack("<HH", d[12:16]))' "$work/sort.perTriangle.tga" 2>
 		report "picture:transparentSorting" FAIL "both orders drew the same picture over $sortFrames frames of $gfxdisc: the setting never reached the renderer"
 	else
 		report "picture:transparentSorting" PASS "$sortFrames frames of $gfxdisc: one machine, two pictures"
+	fi
+fi
+
+# ---- disc:selector -------------------------------------------------------
+# WHICH disc the lid closes on. The lid alone could only go forward one at a
+# time, so a four-disc game reached disc three by putting disc two in and
+# taking it out again on the way; Previous and Next move a selector instead,
+# and the lid puts the selected disc in.
+#
+# What this leg is really guarding is the WRAP, in both directions, because a
+# selector that only counts up is the exact shape of issue #47: past the last
+# disc it read as "put the first one in", so a second Next silently reinserted
+# disc one and no arrangement of presses could reach disc two again.
+#
+# Two ELFs stand in for two discs. The selector never touches the drive, so it
+# does not care what the discs are - which is why this leg runs always, where
+# disc:swap needs two real GD-ROMs and skips without them.
+selroms=""
+for r in counter.elf smc.elf; do [ -f "$root/tests/roms/$r" ] && selroms="$selroms $r"; done
+if [ "$selroms" != " counter.elf smc.elf" ]; then
+	report "disc:selector" SKIP "needs tests/roms/counter.elf and smc.elf (tests/make-testprog.py)"
+else
+	seldir="$work/discsel"
+	mkdir -p "$seldir"
+	cp "$root/tests/roms/counter.elf" "$root/tests/roms/smc.elf" "$seldir/"
+	printf '{"disc":["counter.elf","smc.elf"]}' > "$seldir/slots"
+	# 80 is the lid, 81 Previous, 82 Next - after the four ports, so no movie's
+	# controller numbering moved when they were added
+	selsay() { sed -n 's/.*disc selector: \([0-9]* of [0-9]*\).*/\1/p' | tr '\n' '|'; }
+	selmoved="$("$nat/run-native" "$seldir" --frames 40 \
+		--press 5:2:82 --press 15:2:82 --press 25:2:81 2>&1 | selsay)"
+	# one disc: there is nothing to select, and the controls are not offered
+	seldir1="$work/discsel1"
+	mkdir -p "$seldir1"
+	cp "$root/tests/roms/counter.elf" "$seldir1/"
+	printf '{"disc":["counter.elf"]}' > "$seldir1/slots"
+	selalone="$("$nat/run-native" "$seldir1" --frames 40 \
+		--press 5:2:82 --press 15:2:82 2>&1 | selsay)"
+	if [ "$selmoved" != "2 of 2|1 of 2|2 of 2|" ]; then
+		report "disc:selector" FAIL "Next, Next, Previous gave [$selmoved], wanted [2 of 2|1 of 2|2 of 2|] - it did not wrap"
+	elif [ -n "$selalone" ]; then
+		report "disc:selector" FAIL "a single-disc machine moved a selector: [$selalone]"
+	else
+		report "disc:selector" PASS "the selector wraps both ways, and does nothing with one disc"
+	fi
+fi
+
+# ---- disc:columns --------------------------------------------------------
+# THE BUG THIS EXISTS FOR: the drive's controls were declared, wired and
+# serviced, and IsButtonActive bounded at BTN_COUNT - the last PORT button - so
+# they answered "not on this machine" for every machine and never appeared in a
+# movie at all. Everything about them worked except being pressable.
+#
+# Nothing else here could see that. The selector leg above drives the core's
+# own buttons directly and so never asks whether a movie carries them; only the
+# entry the ENGINE generates reflects IsButtonActive. So this leg asks for one.
+#
+# The other half of the pair is ports:columns below, which records a
+# single-disc machine and requires an EMPTY console group - one disc is a
+# machine with nothing to swap, and offering a changer for it would put three
+# dead columns in every movie ever recorded here.
+# resolved here as well as at ports:columns, because this leg runs first
+dcroot="${CHIMERA_ROOT:-}"
+[ -n "$dcroot" ] || for c in "$root/chimera-checkout" "$root/../../chimera" "$root/../chimera" "$HOME/chimera"; do
+	[ -x "$c/build/meson-linux/chimera-run" ] && { dcroot="$c"; break; }
+done
+crun="$dcroot/build/meson-linux/chimera-run"
+cpkg="$dcroot/build/Cores/flycast.chimeraCore"
+if [ -z "$dcroot" ] || [ ! -x "$crun" ] || [ ! -f "$cpkg" ]; then
+	report "disc:columns" SKIP "needs chimera-run and a built flycast.chimeraCore (set CHIMERA_ROOT)"
+elif [ ! -f "$root/tests/roms/counter.elf" ] || [ ! -f "$root/tests/roms/smc.elf" ]; then
+	report "disc:columns" SKIP "needs tests/roms/counter.elf and smc.elf"
+else
+	dcol="$work/disccol"
+	mkdir -p "$dcol"
+	cp "$root/tests/roms/counter.elf" "$root/tests/roms/smc.elf" "$dcol/"
+	if ! python3 "$here/tests/make-project.py" "$cpkg" "$dcol/two.chimeraProject" 2 dreamcast \
+		-- disc="$dcol/counter.elf" disc="$dcol/smc.elf" >/dev/null 2>&1; then
+		report "disc:columns" FAIL "could not write a two-disc project"
+	else
+		dgot="$("$crun" "$cpkg" --project "$dcol/two.chimeraProject" --files "$dcol" \
+			--frames 1 --record "$dcol/rec.txt" >/dev/null 2>&1 \
+			&& head -1 "$dcol/rec.txt" | sed 's/^\(|[^|]*\).*/\1/')"
+		# the console group, which is everything before the first port: three
+		# controls, so three characters - the lid and the two selector keys
+		if [ "$dgot" = "|..." ]; then
+			report "disc:columns" PASS "a two-disc machine puts the lid and its selector in the movie"
+		else
+			report "disc:columns" FAIL "the console group was [${dgot:-nothing}], wanted [|...] - the drive's controls did not reach the movie"
+		fi
 	fi
 fi
 
