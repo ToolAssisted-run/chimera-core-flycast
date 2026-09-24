@@ -433,12 +433,18 @@ import struct, sys
 d = open(sys.argv[1], "rb").read()
 w, h = struct.unpack("<HH", d[12:16])
 px = d[18:]
+# A TGA pixel is stored B,G,R,A. This check read the bytes as R,G,B until
+# 2026-09-24, which made it DEMAND a blue triangle on red - exactly the picture
+# the software renderer drew while it swapped red and blue in every vertex
+# colour (chimera issue 145). So the colour is spelled out as R,G,B here.
+def rgb(i):
+    return bytes((px[i + 2], px[i + 1], px[i])).hex()
 def span(y):
-    xs = [x for x in range(w) if px[(y * w + x) * 4:(y * w + x) * 4 + 3].hex() == "ff0000"]
+    xs = [x for x in range(w) if rgb((y * w + x) * 4) == "ff0000"]
     return (min(xs), max(xs)) if xs else None
 top, lower = span(100), span(200)
-red = sum(1 for i in range(0, w * h * 4, 4) if px[i:i + 3].hex() == "ff0000")
-blue = sum(1 for i in range(0, w * h * 4, 4) if px[i:i + 3].hex() == "0000ff")
+red = sum(1 for i in range(0, w * h * 4, 4) if rgb(i) == "ff0000")
+blue = sum(1 for i in range(0, w * h * 4, 4) if rgb(i) == "0000ff")
 # A red triangle on a blue background, at 640x480. Every number here is one the
 # program asked for, so a renderer that draws the wrong thing is caught rather
 # than congratulated:
@@ -864,10 +870,15 @@ def load(name):
     w, h = struct.unpack("<HH", d[12:16])
     return w, h, d[18:]
 
+# The readout's TEXT, as a mask of its near-white pixels. It is printed over a
+# photograph of a controller, and the two boxes sit on different parts of it -
+# which the software renderer did not draw until 2026-09-24 (a translucent
+# backdrop at the depth of the one under it, chimera issue 145), so comparing
+# the two boxes' raw pixels only ever worked while the picture was missing it.
 def region(px, w, box):
     x0, y0, x1, y1 = box
-    return b"".join(px[(y * w + x) * 4:(y * w + x) * 4 + 3]
-                    for y in range(y0, y1) for x in range(x0, x1))
+    return bytes(1 if min(px[(y * w + x) * 4:(y * w + x) * 4 + 3]) >= 240 else 0
+                 for y in range(y0, y1) for x in range(x0, x1))
 
 # the two readouts, with a little room around them
 LBOX = (54, 44, 72, 52)
@@ -910,6 +921,51 @@ PY240
 		report "suite240p:triggers" PASS "the 240p Test Suite's own controller readout follows each trigger, and only its own"
 	else
 		report "suite240p:triggers" FAIL "$verdict"
+	fi
+
+	# ---- the menu's character: a translucent sprite over a translucent panel -
+	# The main menu draws its character as a translucent quad at the SAME depth
+	# as the panel under it, with depth mode "greater". Drawn in sorted order,
+	# the way every GPU backend draws a sorted translucent list, the test is
+	# greater-or-equal and writes no depth (gldraw.cpp); the software renderer
+	# used the polygon's own mode and the character never appeared (chimera
+	# issue 145). The box is where it stands; the panel alone is one flat grey.
+	for runner in native wbx; do
+		if [ "$runner" = native ]; then
+			"$nat/run-native" "$sd240" --frames 400 --screenshot "$work/menu.$runner.tga" >/dev/null 2>&1
+		else
+			"$nat/run-wbx" "$gst/core.wbx" "$sd240" --frames 400 --screenshot "$work/menu.$runner.tga" >/dev/null 2>&1
+		fi
+	done
+	verdict="$(python3 - "$work" <<'PYMENU'
+import struct, sys
+work = sys.argv[1]
+def grey_share(name):
+    d = open(f"{work}/menu.{name}.tga", "rb").read()
+    w, h = struct.unpack("<HH", d[12:16])
+    px = d[18:]
+    box = [(x, y) for y in range(85, 185) for x in range(195, 250)]
+    grey = sum(1 for x, y in box if px[(y * w + x) * 4:(y * w + x) * 4 + 3] == bytes((104, 104, 104)))
+    return w, h, grey / len(box)
+try:
+    w, h, native = grey_share("native")
+    _, _, box = grey_share("wbx")
+except Exception as e:
+    print(f"could not read the screenshots: {e}"); sys.exit()
+if (w, h) != (320, 240):
+    print(f"the suite drew {w}x{h}, not 320x240")
+elif native > 0.5:
+    print(f"the character is missing: {native:.0%} of where it stands is bare panel")
+elif abs(native - box) > 1e-9:
+    print("native and sandbox drew the menu differently")
+else:
+    print("ok")
+PYMENU
+)"
+	if [ "$verdict" = "ok" ]; then
+		report "suite240p:menuSprite" PASS "the main menu's character is drawn over its panel, as every GPU backend draws it"
+	else
+		report "suite240p:menuSprite" FAIL "$verdict"
 	fi
 
 	# ---- four ports --------------------------------------------------------

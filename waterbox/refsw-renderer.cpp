@@ -222,8 +222,21 @@ static void RenderTile(int tileX, int tileY, const rend_context& rc)
 
 				ApplyUserClip(pp);
 
+				/* And with the depth test those backends use for it: greater
+				 * OR EQUAL, writing no depth (gldraw.cpp, SetGPState). The
+				 * polygon's own mode is the one a peeled list would compare
+				 * with; drawn in sorted order it is not. KallistiOS draws a
+				 * sprite at the same depth as the backdrop under it with mode
+				 * "greater" - the 240p Test Suite's menu character - and it
+				 * vanished here while every GPU backend drew it (chimera issue
+				 * 145). */
+				ISP_TSP isp;
+				isp.full = IspForRefsw(pp);
+				isp.DepthMode = 6;
+				isp.ZWriteDis = 1;
+
 				RefswParams params;
-				params.isp = IspForRefsw(pp);
+				params.isp = isp.full;
 				params.tsp[0] = pp.tsp.full;
 				params.tcw[0] = pp.tcw.full;
 				params.tsp[1] = pp.tsp1.full;
@@ -703,6 +716,23 @@ struct refswrend : Renderer
 		ta_parse(ctx, true);
 		if (settings.platform.isNaomi2())
 			TransformNaomi2(ctx->rend);
+
+		/* The two Vertex structs share their fields but not their colour
+		 * order. Flycast writes every vertex colour R,G,B,A - the parser, and
+		 * FillBGP for the background quad already in verts[0..3], both pick
+		 * B,G,R,A only for a Direct3D renderer - while refsw's Color is
+		 * B,G,R,A. Crossing unconverted, red and blue traded places on every
+		 * shaded polygon and nowhere else: textures and refsw's own reads
+		 * came out right, so 240p Test Suite highlighted its menu in blue
+		 * instead of red and Marvel vs. Capcom 2's save screen was red where
+		 * every other renderer draws it blue (chimera issue 145). */
+		for (Vertex& v : ctx->rend.verts)
+		{
+			std::swap(v.col[0], v.col[2]);
+			std::swap(v.spc[0], v.spc[2]);
+			std::swap(v.col1[0], v.col1[2]);
+			std::swap(v.spc1[0], v.spc1[2]);
+		}
 	}
 
 	bool Render() override
