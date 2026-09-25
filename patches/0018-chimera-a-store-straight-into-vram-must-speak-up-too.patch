@@ -1,0 +1,69 @@
+diff --git a/core/hw/mem/addrspace.cpp b/core/hw/mem/addrspace.cpp
+--- a/core/hw/mem/addrspace.cpp
++++ b/core/hw/mem/addrspace.cpp
+@@ -196,6 +196,7 @@
+ 
+ 		*(T *)&((u8 *)ptr)[addr] = data;
+ 		chimera_code_written(&((u8 *)ptr)[addr]);
++		chimera_vram_written_ptr(&((u8 *)ptr)[addr]);
+ 	}
+ 	else
+ 	{
+diff --git a/core/hw/pvr/pvr_mem.cpp b/core/hw/pvr/pvr_mem.cpp
+--- a/core/hw/pvr/pvr_mem.cpp
++++ b/core/hw/pvr/pvr_mem.cpp
+@@ -350,6 +350,11 @@
+ 			VramLockedWriteOffset(page);
+ }
+ 
++void chimera_vram_written_offset(u32 offset)
++{
++	chimera_vram_written(offset);
++}
++
+ void chimera_vram_written_range(u32 addr, u32 size)
+ {
+ 	u32 paddr = addr & 0x1FFFFFFF;
+diff --git a/core/hw/pvr/pvr_mem.h b/core/hw/pvr/pvr_mem.h
+--- a/core/hw/pvr/pvr_mem.h
++++ b/core/hw/pvr/pvr_mem.h
+@@ -19,11 +19,28 @@
+ void YUV_reset();
+ 
+ #ifdef CHIMERA_NO_PAGE_PROTECTION
++// A store that lands in vram through a plain pointer - the 64-bit window
++// (0x04000000 and its mirror at 0x06000000) is mapped straight onto vram, and
++// a store queue flushed to area 1 is copied there whole - passes no handler,
++// so the texture cache never hears of it and goes on drawing what used to be
++// there. Only a page protection would have told it, and a sandbox has none
++// (patch 0009). This is asked on every such store, so it is inline: two
++// comparisons, and a call only for a store that is in vram.
++void chimera_vram_written_offset(u32 offset);
++static inline void chimera_vram_written_ptr(const void *p)
++{
++	const u8 *b = (const u8 *)p;
++	const u8 *base = &vram[0];
++	if (b >= base && b < base + VRAM_SIZE)
++		chimera_vram_written_offset((u32)(b - base));
++}
++
+ // A block write - any DMA - lands in vram by memcpy, under no handler at all.
+ // It has to say so itself; see the note in pvr_mem.cpp. addr is an SH4
+ // address, and anything outside vram is ignored, so callers need not look.
+ void chimera_vram_written_range(u32 addr, u32 size);
+ #else
++#define chimera_vram_written_ptr(p) ((void)0)
+ #define chimera_vram_written_range(addr, size) ((void)0)
+ #endif
+ 
+diff --git a/core/hw/sh4/sh4_mem.cpp b/core/hw/sh4/sh4_mem.cpp
+--- a/core/hw/sh4/sh4_mem.cpp
++++ b/core/hw/sh4/sh4_mem.cpp
+@@ -284,6 +284,7 @@
+ 	if (pdst != nullptr)
+ 	{
+ 		*pdst = *src;
++		chimera_vram_written_ptr(pdst);
+ 	}
+ 	else
+ 	{
