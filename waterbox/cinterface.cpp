@@ -93,6 +93,11 @@ static uint32_t g_video[VIDEO_CAPACITY];
  * up and the project asked for more. The software rasteriser cannot draw above
  * native, so it leaves this at 1 whatever the setting says. */
 static int g_videoScale = 1;
+
+/* The translucent list sorted per pixel by the reference rasteriser rather
+ * than per triangle on the CPU (transparentSorting perPixel; patch 0019 reads
+ * it in ta_vtx.cpp). */
+int chimera_per_pixel_sort = 0;
 /* the rotation setting: turn a vertical arcade game's frame (see RotateForCabinet) */
 static bool g_rotateForCabinet;
 /* waterbox/zip-archive.cpp: why the last archive would not open */
@@ -963,19 +968,31 @@ ECL_EXPORT int Init(void)
 			 * reads them in (core/cfg/option.h), and the order declared */
 			static const char *const filters[] = { "machine", "nearest", "linear" };
 			config::TextureFiltering = SettingIndex("textureFiltering", filters, 3, 0);
-
-			/* How translucent polygons are ordered before they are blended.
-			 * The PVR sorts them per PIXEL, in hardware; a GL renderer cannot,
-			 * so Flycast sorts either every triangle (upstream's default) or
-			 * whole strips (cheaper, and what a few games look right under).
-			 * A sorting decision reaches video memory the same way the filter
-			 * does - only through a render-to-texture pass copied back - so
-			 * the same caveat is in its declaration. The reference rasteriser
-			 * sorts per pixel like the PVR and ignores this. */
-			static const char *const sorting[] = { "perTriangle", "perStrip" };
-			config::PerStripSorting = SettingIndex("transparentSorting", sorting, 2, 0) == 1;
 		}
 #endif
+
+		/* How translucent polygons are ordered before they are blended. The PVR
+		 * sorts them per PIXEL, in hardware. Flycast's OpenGL renderers here
+		 * cannot, so it sorts either every triangle (upstream's default) or
+		 * whole strips (cheaper, and what a few games look right under) - and
+		 * the reference rasteriser used to draw that same CPU order too, so
+		 * the software picture was the per-triangle one (chimera#163).
+		 * perPixel lets it sort as the PVR does instead: the translucent list
+		 * is depth-peeled per pixel (refsw/bridge.cpp), which is what the
+		 * hardware does. With an OpenGL renderer it is per-triangle: a per-
+		 * pixel GL renderer needs OpenGL 4.3. A sorting decision reaches video
+		 * memory only through a render-to-texture pass copied back, the same
+		 * caveat as the filter's. */
+		{
+			static const char *const sorting[] = { "perTriangle", "perStrip", "perPixel" };
+			const int sort = SettingIndex("transparentSorting", sorting, 3, 0);
+			config::PerStripSorting = sort == 1;
+#if defined(CHIMERA_GUEST_GL)
+			chimera_per_pixel_sort = sort == 2 && !g_glUp;
+#else
+			chimera_per_pixel_sort = sort == 2;
+#endif
+		}
 
 		/* Bring the renderer up. On a desktop this is the graphics context's
 		 * job - whoever owns the window creates the device and then calls

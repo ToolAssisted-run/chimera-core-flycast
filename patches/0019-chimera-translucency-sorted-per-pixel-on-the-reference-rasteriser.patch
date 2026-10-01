@@ -1,0 +1,22 @@
+diff --git a/core/hw/pvr/ta_vtx.cpp b/core/hw/pvr/ta_vtx.cpp
+index 22fca39..5e8905c 100644
+--- a/core/hw/pvr/ta_vtx.cpp
++++ b/core/hw/pvr/ta_vtx.cpp
+@@ -1166,11 +1166,16 @@ private:
+ static void getRegionTileClipping(u32& xmin, u32& xmax, u32& ymin, u32& ymax);
+ static void getRegionSettings(int passNumber, RenderPass& pass);
+ 
++// chimera: the project asked for per-pixel sorting on the reference rasteriser,
++// which orders translucency per pixel itself (depth peeling), as the PVR does
++extern int chimera_per_pixel_sort;
++
+ static void parseRenderPass(RenderPass& pass, const RenderPass& previousPass, rend_context& ctx, bool primRestart)
+ {
+ 	const bool perPixel = config::RendererType == RenderType::OpenGL_OIT
+ 			|| config::RendererType == RenderType::DirectX11_OIT
+-			|| config::RendererType == RenderType::Vulkan_OIT;
++			|| config::RendererType == RenderType::Vulkan_OIT
++			|| chimera_per_pixel_sort;
+ 	const bool mergeTranslucent = config::PerStripSorting || perPixel;
+ 
+ 	if (config::RenderResolution > 480 && !config::EmulateFramebuffer && config::FixUpscaleBleedingEdge)

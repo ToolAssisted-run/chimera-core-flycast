@@ -605,6 +605,47 @@ print("%dx%d" % struct.unpack("<HH", d[12:16]))' "$work/sort.perTriangle.tga" 2>
 	else
 		report "picture:transparentSorting" PASS "$sortFrames frames of $gfxdisc: one machine, two pictures"
 	fi
+
+fi
+
+# ---- perPixel: the software renderer sorts translucency as the PVR does ------
+# chimera#163. transparentSorting perPixel makes the reference rasteriser
+# depth-peel the translucent list per pixel instead of drawing Flycast's CPU
+# order - the same machine and another picture. (Under OpenGL it is the
+# per-triangle order: cinterface.cpp only sets it with no OpenGL renderer up.)
+# It wants a disc whose translucency the CPU order gets wrong, named by
+# FLYCAST_SORT_DISC, and SKIPs without one, as CI does: Sonic Shuffle (USA)
+# shows it on its attract demo at frame 9001 (FLYCAST_SORT_FRAMES), where
+# Lumina's translucent legs lose the overlap the per-triangle order leaves.
+# Two software runs, no OpenGL: cheap enough to run beside the rest.
+if [ -z "${FLYCAST_SORT_DISC:-}" ]; then
+	report "picture:perPixel" SKIP "set FLYCAST_SORT_DISC to a Dreamcast disc (and FLYCAST_SORT_FRAMES): would prove per-pixel sorting changes the picture and nothing else"
+elif [ ! -f "$FLYCAST_SORT_DISC" ]; then
+	report "picture:perPixel" SKIP "FLYCAST_SORT_DISC=$FLYCAST_SORT_DISC is not a file"
+else
+	pxd="$work/perpixel"
+	mkdir -p "$pxd"
+	pxdisc="$(basename "$FLYCAST_SORT_DISC")"
+	ln -sf "$(cd "$(dirname "$FLYCAST_SORT_DISC")" && pwd)/$pxdisc" "$pxd/$pxdisc"
+	printf '{"disc":["%s"]}' "$pxdisc" > "$pxd/slots"
+	pxFrames=${FLYCAST_SORT_FRAMES:-9001}
+	pxRun() {
+		printf '%s' "$2" > "$pxd/settings"
+		"$nat/run-wbx" "$gst/core.wbx" "$pxd" --frames "$pxFrames" 2>"$work/px.$1.err" > "$work/px.$1.txt"
+		grep -E '^(frames|vsync|audioHash|audioFrames|lagFrames|domain\[)' "$work/px.$1.txt" > "$work/px.$1.machine"
+		sed -n 's/^videoHash=//p' "$work/px.$1.txt"
+	}
+	swTri="$(pxRun triangle '{"renderer":"software"}')"
+	swPix="$(pxRun pixel '{"renderer":"software","transparentSorting":"perPixel"}')"
+	if [ -z "$swTri" ] || [ -z "$swPix" ]; then
+		report "picture:perPixel" FAIL "a run produced no digests: $(grep -v '^\s*$' "$work/px.pixel.err" | tail -1 | cut -c1-100)"
+	elif ! cmp -s "$work/px.triangle.machine" "$work/px.pixel.machine"; then
+		report "picture:perPixel" FAIL "perPixel changed the machine: $(diff "$work/px.triangle.machine" "$work/px.pixel.machine" | tr '\n' ' ' | head -c 120)"
+	elif [ "$swTri" = "$swPix" ]; then
+		report "picture:perPixel" FAIL "the same picture both ways over $pxFrames frames of $pxdisc: perPixel never reached the renderer"
+	else
+		report "picture:perPixel" PASS "$pxFrames frames of $pxdisc on the software renderer: the per-pixel picture differs from the per-triangle one, the machine does not"
+	fi
 fi
 
 # ---- disc:selector -------------------------------------------------------
