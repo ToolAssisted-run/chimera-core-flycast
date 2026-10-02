@@ -1110,10 +1110,11 @@ PYPORTS
 	fi
 
 	# A memory card per connected controller, which is what makes four players
-	# able to save - and ONLY for the devices that have a slot to put one in. A
-	# mouse and a light gun have none on the real thing either. One card per
-	# controller, not two: BOTH of port A's expansion slots default to a VMU,
-	# which is the emulator's habit rather than the machine's.
+	# able to save - and ONLY for the devices that have a slot to put one in.
+	# The light gun has one on the real thing, and a gun game saves to it
+	# (chimera#181); a mouse has none. One card per device, not two: BOTH of
+	# port A's expansion slots default to a VMU, which is the emulator's habit
+	# rather than the machine's.
 	cardcheck() { # <settings json> <expected file list>
 		sd="$work/savedata-cards"
 		rm -rf "$sd"; mkdir -p "$sd"
@@ -1125,13 +1126,13 @@ PYPORTS
 	four="$(cardcheck '{"port1":"gamepad","port2":"gamepad","port3":"gamepad","port4":"gamepad"}' \
 		"vmu_A1.bin vmu_B1.bin vmu_C1.bin vmu_D1.bin ")"
 	mixed="$(cardcheck '{"port1":"gamepad","port2":"twinStick","port3":"mouse","port4":"lightGun"}' \
-		"vmu_A1.bin vmu_B1.bin ")"
+		"vmu_A1.bin vmu_B1.bin vmu_D1.bin ")"
 	if [ -n "$four" ]; then
 		report "suite240p:cards" FAIL "four controllers gave '$four', want one card each"
 	elif [ -n "$mixed" ]; then
-		report "suite240p:cards" FAIL "a mouse and a gun gave '$mixed', and neither has a slot for a card"
+		report "suite240p:cards" FAIL "a pad, a twin stick, a mouse and a gun gave '$mixed', want cards for all but the mouse"
 	else
-		report "suite240p:cards" PASS "a card for every controller and none for a mouse or a gun"
+		report "suite240p:cards" PASS "a card for every controller and the gun, none for the mouse"
 	fi
 else
 	for leg in triggers ports devices cards; do

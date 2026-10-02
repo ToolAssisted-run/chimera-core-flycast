@@ -265,16 +265,6 @@ static void ResetAxesToNeutral()
  * machine, not something that changes under a running movie. */
 static MapleDeviceType g_portDevice[DC_PORTS];
 
-/* The controller FAMILY - everything derived from maple_sega_controller, which
- * all read the same PlainJoystickState and differ only in what they report. A
- * mouse and a light gun are different wires and are not in it; nor do they have
- * expansion slots to put a memory card in, which is true of the real ones. */
-static bool IsControllerFamily(MapleDeviceType t)
-{
-	return t == MDT_SegaController || t == MDT_AsciiStick
-		|| t == MDT_TwinStick || t == MDT_SegaControllerXL;
-}
-
 /* Where a frontend's input actually enters the machine.
  *
  * There is a `kcode[4]` global in gamepad_device.h that looks like the answer
@@ -569,10 +559,13 @@ static void ApplyMachineSettings()
 	 * The defaults are worth knowing too: device1 is a controller and BOTH of
 	 * its expansion slots are memory cards, which is why a one-player machine
 	 * has always exported vmu_A1 and vmu_A2. A card goes in the first slot of
-	 * anything that has one - the controller family - and the second slot is
-	 * left empty, because two cards per player is the emulator's habit and not
-	 * the machine's. A mouse and a light gun have no slots at all on the real
-	 * thing (maple_getPortCount), and get none here. */
+	 * anything that has one, and the second slot is left empty, because two
+	 * cards per player is the emulator's habit and not the machine's. Which
+	 * devices have a slot is maple_getPortCount's answer, as it is the bus's
+	 * when it routes a frame: the controllers, the sticks AND the light gun,
+	 * whose one slot on the real thing takes a VMU or a Jump Pack - The House
+	 * of the Dead 2 saves to it (chimera#181, where this said otherwise and a
+	 * gun game found no card). A mouse has none. */
 	static const char *const devices[] = {
 		"none", "gamepad", "arcadeStick", "twinStick", "xl", "mouse", "lightGun"
 	};
@@ -587,7 +580,7 @@ static void ApplyMachineSettings()
 		g_portDevice[port] = types[SettingIndex(key, devices, 7, port == 0 ? 1 : 0)];
 
 		const MapleDeviceType slot0 =
-			IsControllerFamily(g_portDevice[port]) ? MDT_SegaVMU : MDT_None;
+			maple_getPortCount(g_portDevice[port]) >= 1 ? MDT_SegaVMU : MDT_None;
 
 		snprintf(key, sizeof(key), "device%d", port + 1);
 		config::setTransient("input", key, std::to_string((int)g_portDevice[port]));
