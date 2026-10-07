@@ -11,14 +11,30 @@ has one now - skmp's reference rasteriser from libswirl, fed from Flycast's own
 display lists - so a Dreamcast draws with no GPU anywhere in the picture. What
 that took, and what remains, is in [`docs/PLAN.md`](docs/PLAN.md).
 
+## Using it in Chimera, and building it
+
+Chimera ships no cores and downloads nothing. Download the `.chimeraCore`
+package from this repository's
+[Releases](https://github.com/ToolAssisted-run/chimera-core-flycast/releases)
+page, or build it, and put it in the `Cores` folder beside `Chimera.exe`;
+File > Core Manager lists what is there. The same file runs on Linux and on
+Windows.
+
+The build, in short - it needs a Chimera checkout with miniBox built, and
+[`docs/BUILDING.md`](docs/BUILDING.md) has every step, option and requirement.
+[`AGENTS.md`](AGENTS.md) is the operating guide for an AI coding agent.
+
 ```sh
+# the guest Mesa the OpenGL renderer links: fetched once (SHA-256 pinned), built into build/mesa
+bash waterbox/setup-mesa.sh
+
 # the native reference: the same sources built for the host
 meson setup build/meson-native && ninja -C build/meson-native
 
 # the guest: those sources through miniBox's C++ toolchain, into core.wbx
-sh waterbox/setup-guest.sh && ninja -C build/meson-guest core.wbx
+sh waterbox/setup-guest.sh -- -Dmesa_guest_dir="$PWD/build/mesa" && ninja -C build/meson-guest core.wbx
 
-./waterbox/build-package.sh -r <chimera checkout>   # -> flycast.chimeraCore
+./waterbox/build-package.sh -r <chimera checkout>   # -> <chimera checkout>/build/Cores/flycast.chimeraCore
 ```
 
 Gates:
