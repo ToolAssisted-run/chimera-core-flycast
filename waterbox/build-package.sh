@@ -29,12 +29,10 @@ fi
 chimera_root="$(cd "$chimera_root" && pwd)"
 [ -n "$mb" ] || mb="$chimera_root/extern/chimera-common-minibox"
 
-# The hardware OpenGL renderer is the DEFAULT: the core links a guest Mesa
-# (softpipe + OSMesa, built by waterbox/setup-mesa.sh) and runs
-# Flycast's own GL renderer against it inside the sandbox. That guest Mesa is a
-# chimera submodule sitting beside this core, at extern/mesa-guest, so it
-# resolves both when this core is a submodule of chimera and when a standalone
-# CI clones chimera next to it (chimera_root points at either).
+# The OpenGL renderers need a guest Mesa: the core links one (softpipe +
+# OSMesa) and runs Flycast's own GL renderer against it inside the sandbox.
+# waterbox/setup-mesa.sh builds it into this repository's build/mesa, which is
+# where it is looked for.
 #   MESA_GUEST_DIR=<path>  build against a guest Mesa elsewhere
 #   MESA_GUEST_DIR=        (empty) build the software-only core instead
 if [ "${MESA_GUEST_DIR+set}" = set ]; then

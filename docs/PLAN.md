@@ -344,9 +344,10 @@ Chimera's firmware channel once the machine runs.
 - **A patch that touches two files is a patch that can vanish.** `git apply
   --check` refuses a patch whose hunks are already applied, and refuses the
   WHOLE patch - so reverting one file by hand silently dropped the console-id
-  pin from a two-file patch, and only the equivalence gate noticed. Patches are
-  one file each now, and apply-patches.sh warns when one neither applies nor is
-  applied.
+  pin from a two-file patch, and only the equivalence gate noticed. Patches
+  were one file each for a while after that; now apply-patches.sh judges the
+  series as a whole - all applied, none applied, or it stops and says how to
+  reset - which closes the hole for a patch of any size.
 - **A frame that ends when the GAME says so.** Upstream stops the SH4 in
   `present()` - the moment the renderer puts a picture up - because a desktop
   wants the picture as soon as there is one. A frame-stepped core needs the

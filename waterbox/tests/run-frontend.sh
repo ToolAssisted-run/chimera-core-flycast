@@ -1,11 +1,11 @@
 #!/bin/bash
 # The frontend half of the gate: load the Flycast package in Chimera (under
-# Mono, on a private Xvfb display), boot a homebrew cartridge for a fixed
-# number of frames with nothing pressed, and require the machine's whole RAM -
-# all 128 bytes of it - to be byte-identical to the native reference. Then
-# prove a machine-shaping setting arrives (format=PAL builds a 50Hz machine
-# that still matches ITS native reference), and that the package's keybinds
-# become the frontend's defaults.
+# Mono, on a private Xvfb display), boot a homebrew program for a fixed
+# number of frames with nothing pressed, and require the machine's System RAM
+# to be byte-identical to the native reference. Then prove a machine-shaping
+# setting arrives (region=japan still matches ITS native reference, and the
+# flash is another machine's), and that the package's keybinds become the
+# frontend's defaults.
 #
 # Usage: ./run-frontend.sh [--chimera-root <path>] [--frames N]
 set -u
@@ -144,9 +144,6 @@ elif ! run_frontend "jp" "$work/config.jp.ini" "$frames"; then
 elif ! cmp -s "$work/native.jp.ram.bin" "$work/jp.ram.bin"; then
 	report "settings:region" FAIL "System RAM differs from its native reference with region=japan"
 else
-	# RAM alone cannot show this: a rom whose memory does not depend on the
-	# television still draws a TALLER PICTURE on a PAL machine, and that is
-	# the machine having changed.
 	# RAM alone cannot show this: the region lives in flash, so the two
 	# machines must differ THERE and nowhere else.
 	base_flash="$(sed -n 's/^flashhash=//p' "$work/base.meta.txt")"
