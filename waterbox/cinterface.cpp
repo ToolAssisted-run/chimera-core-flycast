@@ -1321,6 +1321,25 @@ ECL_EXPORT void SetRenderingEnabled(int on) { chimera_render_enabled = on != 0; 
  * it - and this flag is invisible memory, so it could not anyway. */
 ECL_EXPORT void StateLoaded(void) { chimera_gl_state_loaded = 1; }
 
+/* Told before every state the engine takes, the machine stopped between two
+ * frames. The GL renderer keeps one thing a state does not hold and a load
+ * cannot make again: the last frame it drew, which is the picture of every
+ * frame the game draws nothing in. When nobody read that frame - GetVideoBgra
+ * above was not asked, so g_video is an older picture - it is copied into the
+ * core's own memory here, and the rebuild after a load puts it back (patch
+ * 0020, chimera issue 190). Nothing to do for the reference rasteriser, whose
+ * frame is memory already, nor for Mesa inside the sandbox, which is too. */
+#if defined(CHIMERA_GUEST_GL)
+void chimera_gl_state_saving(void);
+#endif
+ECL_EXPORT void StateSaving(void)
+{
+#if defined(CHIMERA_GUEST_GL)
+	if (chimera_gl_available() && renderer != nullptr)
+		chimera_gl_state_saving();
+#endif
+}
+
 ECL_EXPORT int GetVideoWidth(void) { return g_videoWidth; }
 ECL_EXPORT int GetVideoHeight(void) { return g_videoHeight; }
 

@@ -1,0 +1,234 @@
+diff --git a/core/rend/gles/gldraw.cpp b/core/rend/gles/gldraw.cpp
+--- a/core/rend/gles/gldraw.cpp
++++ b/core/rend/gles/gldraw.cpp
+@@ -666,6 +666,7 @@
+ 		gl.ofbo2.framebuffer->bind();
+ 	glCheck();
+ 	gl.ofbo2.ready = true;
++	chimera_gl_frame_drawn();
+ #endif
+ 	this->width = gl.dcfb.width;
+ 	this->height = gl.dcfb.height;
+@@ -818,6 +819,11 @@
+ 
+ bool OpenGLRenderer::GetLastFrame(std::vector<u8>& data, int& width, int& height)
+ {
++	// chimera: the picture is read here on frames the game drew nothing in,
++	// so this path asks the question too - and after a load it is the answer
++	// that puts the frame a state carried back where this reads it from.
++	chimera_check_gl_context(this);
++
+ 	GlFramebuffer *framebuffer = gl.ofbo2.ready ? gl.ofbo2.framebuffer.get() : gl.ofbo.framebuffer.get();
+ 	if (framebuffer == nullptr)
+ 		return false;
+@@ -884,6 +890,7 @@
+ 	}
+ 	restoreCurrentFramebuffer();
+ 	glCheck();
++	chimera_gl_frame_read();
+ 
+ 	return true;
+ }
+diff --git a/core/rend/gles/gles.cpp b/core/rend/gles/gles.cpp
+--- a/core/rend/gles/gles.cpp
++++ b/core/rend/gles/gles.cpp
+@@ -1065,6 +1065,13 @@
+ {
+ 	if (gl.gl_major < 3 && settings.platform.isNaomi2())
+ 		throw RendererException(i18n::T("OpenGL ES 3.0+ required for Naomi 2"));
++	/* chimera: HERE, before the frame's textures are found, and not only in
++	   Render(). Parsing a frame resolves every texture it uses into the
++	   texture cache, and Render() then draws from those; a rebuild between
++	   the two throws the cache away with everything else, and the frame was
++	   drawn from textures that had just been freed - black, on a real card,
++	   for as long as the game took to draw the next one (chimera issue 190). */
++	chimera_check_gl_context(this);
+ 	gl.rendContext = &ctx->rend;
+ 	if (resetTextureCache) {
+ 		TexCache.Clear();
+@@ -1291,6 +1298,7 @@
+ 		gl.ofbo2.ready = false;
+ 		renderLastFrame();
+ #endif
++		chimera_gl_frame_drawn();
+ 	}
+ 	GlVertexArray::unbind();
+ 
+@@ -1376,6 +1384,153 @@
+  * "never seen" sentinel fails identically, because the frame-0 anchor carries
+  * whatever the static's initial value is. */
+ 
++/* chimera: THE LAST FRAME DRAWN IS ON THE CARD AND NOWHERE ELSE (chimera issue 190).
++ *
++ * The picture a frame shows is the last one this renderer drew, kept in a
++ * framebuffer of its own (gl.ofbo, or gl.ofbo2 when the game wrote the
++ * framebuffer itself). A game that draws thirty times a second shows each of
++ * them twice, so on every other frame the picture is one drawn BEFORE that
++ * frame - and when a state is loaded between the two, the framebuffer it was
++ * in went with the context. The rebuild below makes every object again from
++ * the machine's memory, and this one is not in the machine's memory: the
++ * frame after a load showed whatever the dead name still reached (on a real
++ * card, the picture of the moment the load was made FROM), and nothing right
++ * until the game drew again.
++ *
++ * So the engine's word before a state is taken (the StateSaving export) is
++ * answered by copying that frame's pixels here, into the core's own memory,
++ * which a state carries; and the rebuild puts them back into a framebuffer
++ * of the same size. Read as RGBA bytes and written as RGBA bytes: the frame
++ * that comes back is the frame that was there.
++ *
++ * It is copied only when something was drawn since the last copy, so a
++ * picture that stands still costs a state nothing. And not at all when the
++ * frame has been READ: the picture the frontend took is in the core's own
++ * buffer, which a state carries, and on a frame the game draws nothing in the
++ * read finds no framebuffer and leaves that buffer standing - the same
++ * picture, for no bytes. So the copy is for the frames nobody looked at, which
++ * is what a seek leaves behind it, and a state taken while somebody plays is
++ * no larger than it was. A frame read is therefore also where an older copy
++ * stops being the frame, and is thrown out.
++ *
++ * Not into video memory: the game can read that, and would read one thing in
++ * a run that took a state and another in one that did not. */
++namespace
++{
++constexpr u32 CHIMERA_FRAME_MAGIC = 0x4c465843;
++/* the largest frame the package declares a picture for: 640x480 three times
++   over, and square so that a cabinet's turned screen fits as well */
++constexpr int CHIMERA_FRAME_MAX = 1920 * 1920;
++
++struct ChimeraLastFrame
++{
++	u32 magic;	// CHIMERA_FRAME_MAGIC while the pixels below are a frame
++	u32 direct;	// 1: the copy of a framebuffer the game wrote (gl.ofbo2); 0: a rendered frame (gl.ofbo)
++	s32 width;
++	s32 height;
++};
++
++ChimeraLastFrame s_chimera_frame;
++u8 s_chimera_frame_pixels[CHIMERA_FRAME_MAX * 4];
++/* a frame was drawn since the copy above was made */
++bool s_chimera_frame_drawn;
++}
++
++void chimera_gl_frame_drawn()
++{
++	s_chimera_frame_drawn = true;
++}
++
++void chimera_gl_frame_read()
++{
++	s_chimera_frame_drawn = false;
++	if (s_chimera_frame.magic != 0)
++		s_chimera_frame.magic = 0;
++}
++
++extern "C" void chimera_gl_state_saving(void)
++{
++	if (!s_chimera_frame_drawn)
++		return;
++	/* No bridge: the renderer's objects are in the machine's memory already,
++	   and a state carries them. Another context than the one the objects
++	   came from: this state is being taken after a load and before the
++	   renderer looked, the names here are nobody's, and the copy the load
++	   brought is still the frame. */
++	const u64 live = chimera_gl_context_id();
++	if (live == 0 || live != s_chimera_gl_context)
++		return;
++	s_chimera_frame_drawn = false;
++
++	GlFramebuffer *framebuffer = gl.ofbo2.ready ? gl.ofbo2.framebuffer.get() : gl.ofbo.framebuffer.get();
++	if (framebuffer == nullptr || framebuffer->getTexture() == 0
++			|| framebuffer->getWidth() <= 0 || framebuffer->getHeight() <= 0
++			|| framebuffer->getWidth() * framebuffer->getHeight() > CHIMERA_FRAME_MAX)
++	{
++		if (s_chimera_frame.magic != 0)
++			s_chimera_frame.magic = 0;
++		return;
++	}
++	const int width = framebuffer->getWidth();
++	const int height = framebuffer->getHeight();
++
++	GLint readFramebuffer = 0;
++	GLint packAlignment = 4;
++	glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
++	glGetIntegerv(GL_PACK_ALIGNMENT, &packAlignment);
++	framebuffer->bind(GL_READ_FRAMEBUFFER);
++	glPixelStorei(GL_PACK_ALIGNMENT, 1);
++	glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, s_chimera_frame_pixels);
++	glPixelStorei(GL_PACK_ALIGNMENT, packAlignment);
++	glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
++
++	const ChimeraLastFrame now { CHIMERA_FRAME_MAGIC, gl.ofbo2.ready ? 1u : 0u, width, height };
++	if (memcmp(&s_chimera_frame, &now, sizeof now) != 0)
++		s_chimera_frame = now;
++}
++
++/* chimera: the other half - the frame a state carried goes back into a
++   framebuffer of the new context, the one the picture is read from. Made the
++   way the renderer makes each of the two (init_output_framebuffer,
++   RenderFramebuffer), so the next frame drawn finds what it expects. */
++static void chimera_restore_last_frame()
++{
++	s_chimera_frame_drawn = false;
++	if (s_chimera_frame.magic != CHIMERA_FRAME_MAGIC
++			|| s_chimera_frame.width <= 0 || s_chimera_frame.height <= 0
++			|| s_chimera_frame.width * s_chimera_frame.height > CHIMERA_FRAME_MAX)
++		return;
++	const int width = s_chimera_frame.width;
++	const int height = s_chimera_frame.height;
++
++	GLuint texture = 0;
++	if (s_chimera_frame.direct != 0)
++	{
++		gl.ofbo2.framebuffer = std::make_unique<GlFramebuffer>(width, height, false, true);
++		gl.ofbo2.ready = true;
++		texture = gl.ofbo2.framebuffer->getTexture();
++	}
++	else
++	{
++		texture = glcache.GenTexture();
++		glcache.BindTexture(GL_TEXTURE_2D, texture);
++		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
++		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
++		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
++		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
++		glcache.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
++		gl.ofbo.framebuffer = std::make_unique<GlFramebuffer>(width, height, true, texture);
++		gl.ofbo2.ready = false;
++	}
++	GLint unpackAlignment = 4;
++	glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpackAlignment);
++	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
++	glcache.BindTexture(GL_TEXTURE_2D, texture);
++	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, s_chimera_frame_pixels);
++	glPixelStorei(GL_UNPACK_ALIGNMENT, unpackAlignment);
++	glBindFramebuffer(GL_FRAMEBUFFER, gl.ofbo.origFbo);
++}
++
+ /* chimera: has the ground moved? Every object this renderer holds is a NAME a
+    particular GL context handed out, and a whole-machine savestate carries
+    those names into whatever session loads it. The driver refuses every call
+@@ -1409,6 +1564,7 @@
+ 		renderer->Term();
+ 		while (glGetError() != GL_NO_ERROR) {}
+ 		renderer->Init();
++		chimera_restore_last_frame();
+ 		while (glGetError() != GL_NO_ERROR) {}
+ 	}
+ 	s_chimera_gl_context = live;
+diff --git a/core/rend/gles/gles.h b/core/rend/gles/gles.h
+--- a/core/rend/gles/gles.h
++++ b/core/rend/gles/gles.h
+@@ -592,6 +592,12 @@
+ // head of every path about to USE one; on a change it tears the objects down
+ // and builds them again. See the definition in gles.cpp.
+ void chimera_check_gl_context(OpenGLRenderer *renderer);
++// chimera: a frame was drawn into the framebuffer the picture is read from;
++// the copy a state carries (gles.cpp, chimera_gl_state_saving) is out of date.
++void chimera_gl_frame_drawn();
++// chimera: and that frame has been read: the picture is in the core's own
++// buffer now, and no copy of the framebuffer is wanted for it.
++void chimera_gl_frame_read();
+ 
+ #ifdef LIBRETRO
+ extern "C" struct retro_hw_render_callback hw_render;

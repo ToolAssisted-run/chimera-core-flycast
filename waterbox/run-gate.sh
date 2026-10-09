@@ -1398,6 +1398,88 @@ else
 	fi
 fi
 
+# ---- the picture after a load (chimera issue 190) ---------------------------
+#
+# Two things were wrong for three frames after every load on a real card, and
+# patch 0020 is both answers.
+#
+# THE FRAME DRAWN FIRST CAME OUT BLACK. Parsing a frame finds its textures in
+# the texture cache; the rebuild ran afterwards, in Render(), and threw the
+# cache away under the frame that was about to be drawn from it. The check
+# runs before the parse now. Measured here on the 240p Test Suite's menu,
+# which draws every frame: six frames from 601 are remembered as first drawn,
+# the machine is put back on frame 600 - a state on every frame, so the load
+# lands exactly there - and each is drawn again and compared (chimera-run
+# --settle-probe). THE CONTROL IS NOT IN THIS LEG AND CANNOT BE: nothing a run
+# can be told turns the old order back on. It was the build before the patch,
+# by hand, 2026-10-09: 97.29% of the first frame's pixels differed through
+# llvmpipe, and on a GTX 1060 a game that draws thirty times a second (Re-Volt)
+# was black for two frames.
+#
+# THE LAST FRAME DRAWN WAS NOWHERE. The picture of a frame the game draws
+# nothing in is the last one the renderer drew, kept in a framebuffer of the
+# context a load leaves behind. The core copies it into its own memory when
+# the engine says a state is about to be taken (the StateSaving export), and
+# the rebuild puts it back. Measured on triangle.elf, which draws on one frame
+# of its life: the states are taken of frames nobody read a picture from
+# (--settle-probe-unseen, with --draw-every-frame: what a seek leaves in a
+# greenzone), so the core's own copy of the last picture READ is no help, and
+# the six frames after the load must come back exactly. The control is the same
+# run with CHIMERA_NO_STATE_SAVING=1, the engine leaving the core untold, where
+# they must NOT.
+#
+# WHAT THE SECOND HALF COUNTS, and why: triangle.elf's picture through this
+# renderer is one lit pixel, far under what the probe calls a wrong picture.
+# So the leg does not read the probe's verdict there; it reads whether every
+# pixel came back the same, alpha included - which is whether the renderer had
+# a frame to hand over at all. Told, it has. Untold, the picture buffer is the
+# one nobody wrote.
+#
+# And llvmpipe is not a driver: the proof on a real card is the 1060's, in
+# docs/PLAN.md.
+if [ -z "$chimera_root" ] || [ ! -x "$crun" ] || [ ! -f "$cpkg" ]; then
+	report "gl:picture-after-load" SKIP "needs chimera-run and a built flycast.chimeraCore (set CHIMERA_ROOT)"
+elif [ ! -f "$suite" ]; then
+	report "gl:picture-after-load" SKIP "needs the 240p Test Suite (tests/own/240pSuite/240pSuite.cdi)"
+else
+	pal="$work/glafterload"
+	mkdir -p "$pal"
+	printf '[Input]\nLogKey:#\n' > "$pal/none.txt"
+	cp "$suite" "$pal/240pSuite.cdi"
+	palrun() { # <rom> <movie> <log> <chimera-run arguments...>
+		palrom="$1"; palmovie="$2"; pallog="$3"; shift 3
+		CHIMERA_PICTURE_TRACE=1 "$crun" "$cpkg" "$palrom" "$palmovie" \
+			--settings '{"renderer":"opengl-hw"}' "$@" > "$pallog" 2>&1 || true
+	}
+	exact() { grep -c ": 0.00% of pixels differ, 0.00% by more than 8 (largest 0)" "$1"; }
+	palrun "$pal/240pSuite.cdi" "$pal/none.txt" "$pal/record-menu.log" --frames 620 --record "$pal/menu.txt"
+	palrun "$root/tests/roms/triangle.elf" "$pal/none.txt" "$pal/record-once.log" --frames 40 --record "$pal/once.txt"
+	if [ ! -s "$pal/menu.txt" ] || [ ! -s "$pal/once.txt" ]; then
+		report "gl:picture-after-load" FAIL "could not record the movies to go back through (see $pal/record-menu.log)"
+	else
+		every="--gpu --greenzone 4096 --greenzone-period 1 --greenzone-max-stride 1"
+		palrun "$pal/240pSuite.cdi" "$pal/menu.txt" "$pal/menu.log" --frames 620 $every --settle-probe 600,6
+		unseen="--frames 40 $every --settle-probe 20,6 --settle-probe-unseen --draw-every-frame"
+		palrun "$root/tests/roms/triangle.elf" "$pal/once.txt" "$pal/told.log" $unseen
+		CHIMERA_NO_STATE_SAVING=1 palrun "$root/tests/roms/triangle.elf" "$pal/once.txt" "$pal/untold.log" $unseen
+		if grep -q "^chimera gl: no context" "$pal/menu.log"; then
+			report "gl:picture-after-load" SKIP "this build or this machine gives the bridge no GL context: $(sed -n 's/^chimera gl: no context //p' "$pal/menu.log" | head -1)"
+		elif grep -q "^usage: chimera-run" "$pal/told.log"; then
+			report "gl:picture-after-load" SKIP "this chimera-run has no --settle-probe-unseen (an older Chimera)"
+		elif ! grep -q "pictrace: load, on frame 600:" "$pal/menu.log" || ! grep -q "pictrace: load, on frame 20:" "$pal/told.log" || ! grep -q "pictrace: load, on frame 20:" "$pal/untold.log"; then
+			report "gl:picture-after-load" FAIL "a load did not land on the frame before the ones compared, so nothing was measured (see $pal/menu.log, $pal/told.log)"
+		elif ! grep -q "^settle-probe: every frame drawn after the load is the picture it was" "$pal/menu.log"; then
+			report "gl:picture-after-load" FAIL "the menu after a load: $(grep -m1 '^settle-probe: the picture is wrong' "$pal/menu.log" || echo 'the probe gave no verdict') (see $pal/menu.log)"
+		elif [ "$(exact "$pal/untold.log")" -ne 0 ]; then
+			report "gl:picture-after-load" FAIL "the control handed back a frame with the core left untold ($(exact "$pal/untold.log") of 6 exact): the copy is not what brings it back, or the engine told the core anyway (see $pal/untold.log)"
+		elif [ "$(exact "$pal/told.log")" -ne 6 ]; then
+			report "gl:picture-after-load" FAIL "the last frame drawn did not come back from a load: $(exact "$pal/told.log") of 6 frames exact (see $pal/told.log)"
+		else
+			report "gl:picture-after-load" PASS "six frames of a menu drawn right after a load are the pictures they were; a frame drawn once comes back from a state nobody looked at, and with the core left untold it does not"
+		fi
+	fi
+fi
+
 echo
 echo "$ok ok, $failed failed, $skipped skipped"
 [ "$failed" -eq 0 ]

@@ -512,6 +512,58 @@ Chimera's firmware channel once the machine runs.
 
 ## Log
 
+- **2026-10-09** The picture after a load, on a real card (chimera issue 190;
+  patches/0020). Measured on a GTX 1060 with Re-Volt's demo race, which draws
+  thirty times a second: the first frame after a load was the picture of the
+  moment the load was made FROM, the next two were black, and the fourth was
+  right. Two causes, neither of them the card's.
+  - *The black frames.* `Process()` parses a frame and finds its textures in
+    the texture cache; `Render()` draws from them. The context check of patch
+    0015 ran at the head of `Render()`, so after a load the rebuild - a
+    `Term()` and an `Init()`, the texture cache thrown away with the rest -
+    came between the two, and the frame was drawn from textures that had just
+    been freed. It stayed on screen until the game drew again, two frames at
+    thirty a second. The check runs at the head of `Process()` now, as well.
+  - *The first frame.* The picture of a frame the game draws nothing in is
+    the last frame the renderer drew, kept in a framebuffer of its own
+    (`gl.ofbo`, or `gl.ofbo2` for a framebuffer the game wrote itself) and
+    read through `GetLastFrame`, which asked nothing about the context: it
+    read the old names, and the card still had the picture they named. That
+    frame is not in the machine's memory and a rebuild cannot make it. So the
+    core answers the engine's `StateSaving` (told before every state is
+    taken): the frame's pixels are copied into the core's own memory, which a
+    state carries, and the rebuild puts them back into a framebuffer of the
+    same size. `GetLastFrame` asks about the context too.
+  - *What the copy costs, and when it is not made.* A frame that has been
+    READ needs none: the picture is in `g_video`, which a state carries, and
+    after a load a read that finds no framebuffer leaves it standing. So the
+    copy is made only of frames nobody looked at - what a seek that still
+    draws leaves in a greenzone - and a frame read throws an older copy out.
+    On the card, a state on every frame over 4300 frames: with every frame
+    read, the same 4059 states of the same size told and untold, 43 s both;
+    with frames drawn and not read, a state grows by the frame (1.2 MB at 1x)
+    and the history spaces itself out, 1829 states against 4269.
+  - *Not in video memory.* The game can read that, and would read one thing in
+    a run that took a state and another in one that did not.
+  - *Proved on the card:* every one of twelve frames after a load bit for bit
+    the picture it was - a greenzone restore, a whole state, a load landing on
+    the frame before a drawn one and on the frame before an undrawn one, at 1x
+    and at 3x, and from states taken of frames nobody read. With the core left
+    untold (`CHIMERA_NO_STATE_SAVING=1`) the first frame after a load onto an
+    unread state is wrong, which is the control. Eight rewinds of 250 frames
+    end on the picture, the system RAM, the video RAM and the sound RAM of a
+    run that never took a state.
+  - *The gate:* `gl:picture-after-load`, both halves, through llvmpipe - the
+    240p Test Suite's menu for the frame drawn first (97.29% of its pixels
+    were wrong on the build before this), `triangle.elf` for the frame drawn
+    once, with the untold control.
+  - *Not carried:* a render-to-texture pass. With `RenderToTextureBuffer` off,
+    which is how this core runs every game but the dozen upstream forces it on
+    for, the result is a texture on the card and nowhere else, and a load
+    loses it until the game draws it again. Nearly every game does, every
+    frame; one that draws such a texture once and keeps using it would show
+    what the video memory under it holds instead. Not measured: nothing here
+    is known to do it.
 - **2026-09-21** Per-pixel transparent sorting is NOT BUILT, and this is what
   it would take (chimera issue #122, reopened by DmytroM1998: "Why not
   perPixel also? It's the most accurate of the options").
