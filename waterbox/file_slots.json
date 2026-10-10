@@ -1,5 +1,5 @@
 {
-	"_comment": "The core-declared file form for chimera's project wizard. One core.wbx is four machines and each takes its own kind of file, so the machine setting decides which slots are exposed: a Dreamcast project is one disc (a .gdi names its tracks in a sibling file, so the wizard takes the index and the frontend mounts what it references); an arcade project is a MAME rom set.",
+	"_comment": "This file lists the kinds of file a project of this core can hold. Chimera's New Project window is built from it. The core is four machines and each takes its own kind of file, so the Machine setting decides which slots are shown. A Dreamcast project is one disc. A .gdi file names its tracks in other files next to it, so the wizard takes the .gdi and Chimera adds the files it names. An arcade project is a MAME ROM set.",
 	"slots": [
 		{
 			"id": "disc",
@@ -13,7 +13,7 @@
 				"cue",
 				"elf"
 			],
-			"help": "The GD-ROM image. A .gdi index (with its track files beside it), a .cdi, a .chd, or a .cue - and a naked .elf, which the HLE bios boots straight from memory the way homebrew is usually tested. A game that spans several discs takes them all, in order: the first one boots, and the drive's inputs change them the way the lid does on the machine. Previous Disc and Next Disc move a selector through the list, wrapping at both ends; Disc Swap is the lid itself, and the disc that is selected goes in when it shuts. Which disc is in the drive is part of the machine, so a movie records the swap rather than the frontend remembering it.",
+			"help": "The GD-ROM image. It can be a .gdi file (with its track files next to it), a .cdi, a .chd or a .cue. A plain .elf program is also accepted, and the 'hle' BIOS starts it directly from memory, which is how homebrew is usually tested. A game on several discs takes all of them, in order. The first disc starts the machine, and the drive's inputs change discs as opening the lid does on the console. Previous Disc and Next Disc move a selection through the list and wrap around at both ends. Disc Swap opens and closes the lid, and the selected disc is in the drive when it closes. Which disc is in the drive is part of the machine, so a movie records each swap.",
 			"exposedWhen": {
 				"setting": "machine",
 				"is": "dreamcast"
@@ -31,7 +31,7 @@
 				"bin",
 				"lst"
 			],
-			"help": "The game's MAME rom set: the zip, named exactly as MAME names it (vf4.zip, ikaruga.zip), because the name is how Flycast recognises the set - a renamed zip is an unknown game. A CLONE set (a revision, a region) leans on its parent for the roms it shares, so put the parent zip here beside it; the core works out which is which. A NAOMI GD-ROM game is its zip (the security PIC) plus the disc as a .chd, named as MAME names it (gdl-0010.chd), also here. The bios set comes from the firmware page, not from here. Decrypted dumps in the old nullDC form (.dat, .bin, .lst) also load, and say in their own header which board they are for.",
+			"help": "The game's MAME ROM set. It is a zip that must have exactly the name MAME gives it (vf4.zip, ikaruga.zip), because the name is how Flycast recognises the set. A renamed zip is an unknown game. A CLONE set (another revision or region) uses its parent's set for the ROMs they share, so put the parent's zip here too, and the core works out which is which. A NAOMI GD-ROM game is its zip (the security chip) plus the disc as a .chd file with the name MAME gives it (gdl-0010.chd), also here. The BIOS set comes from the firmware page and not from here. Decrypted dumps in the old nullDC format (.dat, .bin, .lst) also load, and their own header says which board they are for.",
 			"exposedWhen": {
 				"setting": "machine",
 				"in": [
@@ -49,13 +49,13 @@
 			"formats": [
 				"bin"
 			],
-			"help": "What the machine's memory cards start with already on them. These are the files Emulator > Export Save Data... writes, put back under the same names - vmu_A1.bin through vmu_D1.bin, one card in the first slot of each connected controller. Each is mounted read-only and pinned by hash, and the movie cites it, so a movie that starts from a saved game is as reproducible as one that starts from a blank card. Leave it empty and the machine formats fresh cards.",
+			"help": "What is already saved on the machine's memory cards at the start. These are the files that Emulator > Export Save Data... writes. Put them back under the same names, vmu_A1.bin to vmu_D1.bin, one card in the first slot of each connected controller. The files are never changed. The project and the movie record exactly which files they were, so a movie that starts from a saved game can be played back by anyone who has the same files. Leave this empty and the machine starts with freshly formatted cards.",
 			"exposedWhen": {
 				"setting": "machine",
 				"is": "dreamcast"
 			},
 			"namePattern": "^vmu_[A-D][12]\\.bin$",
-			"nameHelp": "a memory card is read by its name: vmu_A1.bin through vmu_D1.bin, the first card of each connected controller (vmu_A2..vmu_D2 the second) - the names Export Save Data writes. Rename the file to the card it should be."
+			"nameHelp": "a memory card is identified by its file name: vmu_A1.bin to vmu_D1.bin for the first card of each connected controller, vmu_A2 to vmu_D2 for the second. These are the names Export Save Data writes. Rename the file to the card it should be."
 		},
 		{
 			"id": "boardmemory",
@@ -67,7 +67,7 @@
 				"nvmem",
 				"bin"
 			],
-			"help": "What the arcade board's memory starts with: the JVS board's EEPROM (<rom set>.eeprom - coin settings, the game's own options), the bios's battery-backed RAM (<rom set>.nvmem - bookkeeping, backup data), and the two memory cards a NAOMI panel can carry (vmu_B1.bin, vmu_C1.bin - a few games save to them). These are the files Emulator > Export Save Data... writes; put back under the same names they seed the board, so a movie that starts from a cabinet somebody set up in the test menu is as reproducible as one that starts from a fresh board. Leave it empty and the board starts as Flycast starts it: the game's default EEPROM, fresh cards, and free play or coins as the coin setting says.",
+			"help": "What the arcade board's memory holds at the start. There are three kinds of file. <rom set>.eeprom is the settings memory of the input board (coin settings and the game's own options). <rom set>.nvmem is the BIOS's battery-backed memory (bookkeeping and backup data). vmu_B1.bin and vmu_C1.bin are the two memory cards a NAOMI control panel can hold, which a few games save to. These are the files that Emulator > Export Save Data... writes. Put back under the same names, they set the board up as it was, so a movie that starts from a cabinet configured in its test menu can be played back by anyone who has the same files. Leave this empty and the board starts as Flycast starts it: the game's default settings, empty cards, and free play or coins according to the Coin Setting.",
 			"exposedWhen": {
 				"setting": "machine",
 				"in": [
@@ -77,7 +77,7 @@
 				]
 			},
 			"namePattern": "\\.(eeprom|nvmem|nvmem2)$|^vmu_[A-D][12]\\.bin$",
-			"nameHelp": "the board's memory is read by name: <rom set>.eeprom, <rom set>.nvmem, and the cards vmu_B1.bin / vmu_C1.bin - the names Export Save Data writes."
+			"nameHelp": "the board's memory files are identified by name: <rom set>.eeprom, <rom set>.nvmem, and the cards vmu_B1.bin and vmu_C1.bin. These are the names Export Save Data writes."
 		}
 	]
 }
