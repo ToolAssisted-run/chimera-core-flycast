@@ -7,21 +7,28 @@ Two renderers do not round every edge alike, so a few pixels along the edges
 of what is drawn may differ; a picture that is wrong differs in far more. A
 pixel counts as different when any of its colours is more than 8 levels (of
 255) away. Exit 0 when at most the given share differs (default 5 per
-thousand), 1 when more does or the sizes differ, 2 on a file that is not an
-uncompressed 32-bit TGA - which is what the harness writes."""
+thousand), 1 when more does or the sizes differ, 2 on a file that is missing
+or is not an uncompressed 32-bit TGA - which is what the harness writes."""
 import struct
 import sys
 
 
 def read(path):
-    data = open(path, "rb").read()
+    try:
+        data = open(path, "rb").read()
+    except OSError as e:
+        # 2, not 1: a picture that is not there is not "a different picture"
+        print(f"{path}: {e.strerror}")
+        sys.exit(2)
     if len(data) < 18 or data[2] != 2 or data[16] != 32:
-        sys.exit(f"{path}: not an uncompressed 32-bit TGA")
+        print(f"{path}: not an uncompressed 32-bit TGA")
+        sys.exit(2)
     width, height = struct.unpack_from("<HH", data, 12)
     start = 18 + data[0]
     pixels = data[start:start + width * height * 4]
     if len(pixels) != width * height * 4:
-        sys.exit(f"{path}: {len(pixels)} bytes of pixels for {width}x{height}")
+        print(f"{path}: {len(pixels)} bytes of pixels for {width}x{height}")
+        sys.exit(2)
     return width, height, pixels
 
 
