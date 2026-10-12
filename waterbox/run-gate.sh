@@ -1480,6 +1480,175 @@ else
 	fi
 fi
 
+# ---- the Vulkan renderer (chimera issue 248) --------------------------------
+#
+# The Renderer setting's "vulkan-hw": Flycast's Vulkan renderer, on the Vulkan
+# device Chimera hands the core. This core's own runners carry no GPU bridge,
+# so these checks go through chimera-run and the engine's, like the ones above.
+# They need a Vulkan driver on this computer - one that draws on the processor
+# will do (Mesa's lavapipe) - and say SKIP without one.
+#
+# What they hold, on the 240p Test Suite's menu:
+#  - the renderer comes up on a Vulkan device, and the machine's memory is
+#    what it is under OpenGL;
+#  - the picture is OpenGL's, and a frame from before the menu is told apart;
+#  - a state saved and loaded around every frame - every load is a new Vulkan
+#    device, and the whole renderer is made again - is the straight run,
+#    picture included. The run's log has to show the renderer made 300 times
+#    over, or nothing was held: the straight run makes it once;
+#  - six frames drawn right after one load are the pictures they were, and a
+#    frame drawn once (triangle.elf) comes back from a state taken of a frame
+#    nobody read a picture from: the core fetches the picture when the engine
+#    says a state is about to be taken. The control leaves the core untold
+#    (CHIMERA_NO_STATE_SAVING=1), and the frame must then NOT come back;
+#  - with a disc (FLYCAST_GFX_DISC): a frame the game draws is shown on the
+#    frame OpenGL shows it. Flycast's Vulkan renderer hands a frame over when
+#    the game points the display at it, a field or two after drawing it; its
+#    OpenGL and this core's software renderer hand it over in the field it
+#    was drawn, and this core makes the Vulkan one do the same. The suite
+#    cannot show the difference (it draws and shows in the same field), a game
+#    drawing thirty times a second does. FLYCAST_VK_FRAME names a frame where
+#    the picture moves; the default is in Re-Volt's demo race;
+#  - with another disc (FLYCAST_VK_TEXTURE_DISC): a picture drawn with a
+#    small texture is OpenGL's. Flycast's Vulkan renderer writes a texture of
+#    up to 32 rows straight into the image's own memory, which stays mapped,
+#    where a larger one goes through a buffer; through Chimera's Vulkan
+#    bridge that path sent nothing to the card until its unmap was made to
+#    (patches/0021, vmallocator.h), and the texture stayed black. Marvel vs.
+#    Capcom 2 draws the background of its memory card screen with one 8x8
+#    texture: frame 1800, the default of FLYCAST_VK_TEXTURE_FRAME. Nothing in
+#    this repository draws a small texture through a card renderer (they show
+#    triangle.elf as one pixel), so this needs a game.
+#
+# What they do NOT stand in for: a test program is not a game and lavapipe is
+# not a graphics card. What games drew on a GTX 1060 is in docs/PLAN.md. And
+# chimera-run does not say when the bridge refused a command (one sent with a
+# handle of a device a load destroyed), so nothing here can claim none was;
+# that was counted once with a debugger, and is in docs/PLAN.md too.
+vk_legs="vk:bridge vk:picture vk:rerecord vk:picture-after-load vk:frame-on-time vk:small-texture"
+if [ -z "$chimera_root" ] || [ ! -x "$crun" ] || [ ! -f "$cpkg" ]; then
+	for leg in $vk_legs; do report "$leg" SKIP "needs chimera-run and a built flycast.chimeraCore (set CHIMERA_ROOT)"; done
+elif [ ! -f "$suite" ]; then
+	for leg in $vk_legs; do report "$leg" SKIP "needs the 240p Test Suite (tests/own/240pSuite/240pSuite.cdi)"; done
+else
+	vk="$work/vulkan"
+	mkdir -p "$vk"
+	printf '[Input]\nLogKey:#\n' > "$vk/none.txt"
+	cp "$suite" "$vk/240pSuite.cdi"
+	vkrun() { # <name> <renderer> <chimera-run arguments...>: the log in $vk/<name>.log
+		vkname="$1"; vkrenderer="$2"; shift 2
+		CHIMERA_PICTURE_TRACE=1 "$crun" "$cpkg" "$vk/240pSuite.cdi" "$vk/menu.txt" --gpu \
+			--settings "{\"renderer\":\"$vkrenderer\"}" "$@" > "$vk/$vkname.log" 2>&1 || true
+	}
+	"$crun" "$cpkg" "$vk/240pSuite.cdi" "$vk/none.txt" --frames 320 --record "$vk/menu.txt" > "$vk/record.log" 2>&1 || true
+	vkrun straight vulkan-hw --frames 300 --screenshot "299=$vk/vk.tga" --dump "System RAM=$vk/vk.ram"
+	vk_card="$(grep -o 'chimera vk: .*(Vulkan [^)]*)' "$vk/straight.log" | head -1 | cut -c13-)"
+	if [ ! -s "$vk/menu.txt" ]; then
+		for leg in $vk_legs; do report "$leg" FAIL "could not record a movie to run (see $vk/record.log)"; done
+	elif grep -q "no Vulkan was handed over" "$vk/straight.log"; then
+		for leg in $vk_legs; do
+			report "$leg" SKIP "this chimera-run handed the core no Vulkan: $(grep -m1 -o 'chimera vk: no Vulkan[^(]*([^)]*)' "$vk/straight.log" | cut -c1-90)"
+		done
+	else
+		vkrun gl opengl-hw --frames 300 --screenshot "299=$vk/gl.tga" --dump "System RAM=$vk/gl.ram"
+		vkrun early vulkan-hw --frames 40 --screenshot "39=$vk/early.tga"
+		if [ -n "$vk_card" ] && grep -q "frames=300" "$vk/straight.log" \
+			&& [ -s "$vk/vk.ram" ] && cmp -s "$vk/vk.ram" "$vk/gl.ram"; then
+			report "vk:bridge" PASS "300 frames of the 240p suite on a Vulkan device ($vk_card), and System RAM is what it is under OpenGL"
+		else
+			report "vk:bridge" FAIL "device [${vk_card:-none made}], $(cmp "$vk/vk.ram" "$vk/gl.ram" 2>&1 | cut -c1-60) (see $vk/straight.log)"
+		fi
+
+		same="$(python3 "$here/tests/check-same-picture.py" "$vk/gl.tga" "$vk/vk.tga" 2>&1)"; same_rc=$?
+		other="$(python3 "$here/tests/check-same-picture.py" "$vk/gl.tga" "$vk/early.tga" 2>&1)"; other_rc=$?
+		if [ "$same_rc" = 0 ] && [ "$other_rc" = 1 ]; then
+			report "vk:picture" PASS "Vulkan draws what OpenGL draws at frame 300: ${same%% (*}; a frame from before the menu is told apart (${other%% (*})"
+		else
+			report "vk:picture" FAIL "against OpenGL at frame 300: $(head -1 <<< "$same"); another frame, which must differ: $(head -1 <<< "$other")"
+		fi
+
+		vkrun rr vulkan-hw --frames 300 --rerecord --screenshot "299=$vk/rr.tga" --dump "System RAM=$vk/rr.ram"
+		made="$(grep -a -c "VulkanRenderer::Init" "$vk/rr.log")"
+		made_straight="$(grep -a -c "VulkanRenderer::Init" "$vk/straight.log")"
+		if [ ! -s "$vk/rr.ram" ] || ! cmp -s "$vk/vk.ram" "$vk/rr.ram" || ! cmp -s "$vk/vk.tga" "$vk/rr.tga"; then
+			report "vk:rerecord" FAIL "a state saved and loaded around every frame is not the straight run: memory $(cmp -s "$vk/vk.ram" "$vk/rr.ram" && echo same || echo differs), picture $(cmp -s "$vk/vk.tga" "$vk/rr.tga" && echo same || echo differs) (see $vk/rr.log)"
+		elif [ "$made" -lt 300 ] || [ "$made_straight" -ne 1 ]; then
+			report "vk:rerecord" FAIL "the renderer was made $made times in the run with the loads and $made_straight in the straight one, where 300 or more and 1 are expected: the loads did not happen, or the log changed (see $vk/rr.log)"
+		else
+			report "vk:rerecord" PASS "300 frames with a state saved and loaded around every one are the straight run, memory and picture; the renderer was made again $((made - 1)) times"
+		fi
+
+		# six frames of the menu after a load; then a program that draws on one
+		# frame of its life, saved on frames nobody read a picture from (what a
+		# seek leaves behind), told and - the control - left untold
+		vkrun probe vulkan-hw --frames 320 --greenzone 4096 --greenzone-period 1 --greenzone-max-stride 1 --settle-probe 300,6
+		"$crun" "$cpkg" "$root/tests/roms/triangle.elf" "$vk/none.txt" --frames 40 --record "$vk/once.txt" > "$vk/record-once.log" 2>&1 || true
+		vkonce() { # <name>: the log in $vk/<name>.log
+			CHIMERA_PICTURE_TRACE=1 "$crun" "$cpkg" "$root/tests/roms/triangle.elf" "$vk/once.txt" --gpu --settings '{"renderer":"vulkan-hw"}' \
+				--frames 40 --greenzone 4096 --greenzone-period 1 --greenzone-max-stride 1 \
+				--settle-probe 20,6 --settle-probe-unseen --draw-every-frame > "$vk/$1.log" 2>&1 || true
+		}
+		vkonce told
+		CHIMERA_NO_STATE_SAVING=1 vkonce untold
+		vkexact() { grep -c ": 0.00% of pixels differ, 0.00% by more than 8 (largest 0)" "$1"; }
+		if grep -q "^usage: chimera-run" "$vk/probe.log" || grep -q "^usage: chimera-run" "$vk/told.log"; then
+			report "vk:picture-after-load" SKIP "this chimera-run has no --settle-probe or --settle-probe-unseen (an older Chimera)"
+		elif ! grep -q "pictrace: load, on frame 300:" "$vk/probe.log" || ! grep -q "pictrace: load, on frame 20:" "$vk/told.log" || ! grep -q "pictrace: load, on frame 20:" "$vk/untold.log"; then
+			report "vk:picture-after-load" FAIL "a load did not land on the frame before the ones compared, so nothing was measured (see $vk/probe.log, $vk/told.log)"
+		elif [ "$(vkexact "$vk/probe.log")" -ne 6 ]; then
+			report "vk:picture-after-load" FAIL "$(vkexact "$vk/probe.log") of 6 frames of the menu after a load came back exactly (see $vk/probe.log)"
+		elif [ "$(vkexact "$vk/untold.log")" -ne 0 ]; then
+			report "vk:picture-after-load" FAIL "the control handed back a frame with the core left untold ($(vkexact "$vk/untold.log") of 6 exact): the copy is not what brings it back, or the engine told the core anyway (see $vk/untold.log)"
+		elif [ "$(vkexact "$vk/told.log")" -ne 6 ]; then
+			report "vk:picture-after-load" FAIL "a frame drawn once did not come back from a load: $(vkexact "$vk/told.log") of 6 frames exact (see $vk/told.log)"
+		else
+			report "vk:picture-after-load" PASS "six frames of the menu drawn right after a load are bit for bit the pictures they were; a frame drawn once comes back from a state nobody looked at, and with the core left untold it does not"
+		fi
+
+		vkf=${FLYCAST_VK_FRAME:-3996}
+		if [ -z "${FLYCAST_GFX_DISC:-}" ] || [ ! -f "${FLYCAST_GFX_DISC:-}" ]; then
+			report "vk:frame-on-time" SKIP "set FLYCAST_GFX_DISC to a Dreamcast disc (and FLYCAST_VK_FRAME to a frame where its picture moves): would prove Vulkan shows a frame on the frame OpenGL shows it"
+		else
+			# the same blank row as the suite's movie, as many times as needed
+			yes "$(head -1 "$vk/menu.txt")" | head -n $((vkf + 1)) > "$vk/long.txt"
+			for r in opengl vulkan; do
+				CHIMERA_PICTURE_TRACE=1 "$crun" "$cpkg" "$FLYCAST_GFX_DISC" "$vk/long.txt" --gpu --settings "{\"renderer\":\"$r-hw\"}" \
+					--frames $((vkf + 1)) --screenshot "$((vkf - 2))=$vk/time-$r-before.tga" --screenshot "$vkf=$vk/time-$r.tga" \
+					> "$vk/time-$r.log" 2>&1 || true
+			done
+			moved="$(python3 "$here/tests/check-same-picture.py" "$vk/time-opengl-before.tga" "$vk/time-opengl.tga" 2>&1)"; moved_rc=$?
+			ontime="$(python3 "$here/tests/check-same-picture.py" "$vk/time-opengl.tga" "$vk/time-vulkan.tga" 2>&1)"; ontime_rc=$?
+			late="$(python3 "$here/tests/check-same-picture.py" "$vk/time-opengl-before.tga" "$vk/time-vulkan.tga" 2>&1)"
+			if [ "$moved_rc" = 0 ]; then
+				report "vk:frame-on-time" SKIP "this disc's picture does not move between frames $((vkf - 2)) and $vkf: set FLYCAST_VK_FRAME to one where it does"
+			elif [ "$moved_rc" != 1 ]; then
+				report "vk:frame-on-time" FAIL "no OpenGL pictures to compare with: $(printf '%s' "$moved" | head -1) (see $vk/time-opengl.log)"
+			elif [ "$ontime_rc" = 0 ]; then
+				report "vk:frame-on-time" PASS "frame $vkf of $(basename "$FLYCAST_GFX_DISC") is the same picture with Vulkan as with OpenGL (${ontime%% (*}), where two frames earlier OpenGL showed another (${moved%% (*})"
+			else
+				report "vk:frame-on-time" FAIL "frame $vkf with Vulkan is not OpenGL's frame $vkf: $(printf '%s' "$ontime" | head -1); against OpenGL's frame $((vkf - 2)): $(printf '%s' "$late" | head -1)"
+			fi
+		fi
+
+		vktf=${FLYCAST_VK_TEXTURE_FRAME:-1800}
+		if [ -z "${FLYCAST_VK_TEXTURE_DISC:-}" ] || [ ! -f "${FLYCAST_VK_TEXTURE_DISC:-}" ]; then
+			report "vk:small-texture" SKIP "set FLYCAST_VK_TEXTURE_DISC to a disc that draws with a small texture (Marvel vs. Capcom 2, or another with FLYCAST_VK_TEXTURE_FRAME): would prove Vulkan draws it as OpenGL does"
+		else
+			yes "$(head -1 "$vk/menu.txt")" | head -n $((vktf + 1)) > "$vk/long.txt"
+			for r in opengl vulkan; do
+				"$crun" "$cpkg" "$FLYCAST_VK_TEXTURE_DISC" "$vk/long.txt" --gpu --settings "{\"renderer\":\"$r-hw\"}" \
+					--frames $((vktf + 1)) --screenshot "$vktf=$vk/texture-$r.tga" > "$vk/texture-$r.log" 2>&1 || true
+			done
+			small="$(python3 "$here/tests/check-same-picture.py" "$vk/texture-opengl.tga" "$vk/texture-vulkan.tga" 2>&1)"; small_rc=$?
+			if [ "$small_rc" = 0 ]; then
+				report "vk:small-texture" PASS "frame $vktf of $(basename "$FLYCAST_VK_TEXTURE_DISC") is the same picture with Vulkan as with OpenGL (${small%% (*})"
+			else
+				report "vk:small-texture" FAIL "frame $vktf with Vulkan is not OpenGL's: $(printf '%s' "$small" | head -1) (see $vk/texture-vulkan.log)"
+			fi
+		fi
+	fi
+fi
+
 echo
 echo "$ok ok, $failed failed, $skipped skipped"
 [ "$failed" -eq 0 ]

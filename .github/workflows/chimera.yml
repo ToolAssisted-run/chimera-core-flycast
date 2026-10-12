@@ -65,16 +65,18 @@ jobs:
           sudo apt-get install -y --no-install-recommends meson ninja-build build-essential python3 bison flex pkg-config python3-mako python3-packaging
 
       - name: Check out what the core actually compiles
-        # Flycast is a big tree with many submodules and this core uses one of
+        # Flycast is a big tree with many submodules and this core uses five of
         # them: libchdr, which reads CHD discs and brings its own zlib, zstd and
-        # lzma, and xbyak, the x64 assembler the SH4 recompiler emits through.
-        # The rest - SDL, Vulkan headers, breakpad, asio - belong to the desktop
-        # application (see waterbox/sources.sh) and are never fetched.
+        # lzma; xbyak, the x64 assembler the SH4 recompiler emits through; and,
+        # for the Vulkan renderer, the Vulkan headers, the Vulkan Memory
+        # Allocator and glslang, which compiles its shaders. The rest - SDL,
+        # breakpad, asio - belong to the desktop application (see
+        # waterbox/sources.sh) and are never fetched.
         # -C extern/flycast: libchdr is a submodule OF flycast, at
         # core/deps/libchdr relative to it. The superproject only knows
         # extern/flycast, so naming the nested path from here is a pathspec git
         # has never heard of - which is what it said, on every run since 09-04.
-        run: git -C extern/flycast submodule update --init --recursive --depth 1 core/deps/libchdr core/deps/xbyak
+        run: git -C extern/flycast submodule update --init --recursive --depth 1 core/deps/libchdr core/deps/xbyak core/deps/Vulkan-Headers core/deps/VulkanMemoryAllocator core/deps/glslang
 
       - name: Check out miniBox
         working-directory: chimera-checkout
@@ -180,7 +182,7 @@ jobs:
         # core/deps/libchdr relative to it. The superproject only knows
         # extern/flycast, so naming the nested path from here is a pathspec git
         # has never heard of - which is what it said, on every run since 09-04.
-        run: git -C extern/flycast submodule update --init --recursive --depth 1 core/deps/libchdr core/deps/xbyak
+        run: git -C extern/flycast submodule update --init --recursive --depth 1 core/deps/libchdr core/deps/xbyak core/deps/Vulkan-Headers core/deps/VulkanMemoryAllocator core/deps/glslang
 
       - name: Build the native reference
         run: |

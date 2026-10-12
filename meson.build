@@ -123,6 +123,23 @@ if guest_gl
   add_project_arguments(['-DCHIMERA_GUEST_GL', '-DUSE_OPENGL', '-DCHIMERA_NO_IMGUI'], language: ['c', 'cpp'])
 endif
 
+# The Vulkan renderer (chimera issue 248): the guest's only, and only where
+# the hardware renderers are built at all. What it draws with is the Vulkan
+# device Chimera hands the core; the reference flavour has no Chimera. The
+# definitions are upstream's own for a Vulkan build, and the include paths are
+# its three submodules (headers, memory allocator, shader compiler) and the
+# libretro header whose interface Flycast's windowless Vulkan context speaks.
+guest_vk = meson.is_cross_build() and guest_gl
+if guest_vk
+  add_project_arguments(['-DCHIMERA_GUEST_VK', '-DUSE_VULKAN', '-DVK_ENABLE_BETA_EXTENSIONS', '-DVK_NO_PROTOTYPES',
+    '-I' + meson.current_source_dir() / fc / 'core/deps/Vulkan-Headers/include',
+    '-I' + meson.current_source_dir() / fc / 'core/deps/VulkanMemoryAllocator/include',
+    '-I' + meson.current_source_dir() / fc / 'core/deps/glslang',
+    '-I' + meson.current_source_dir() / fc / 'core/deps/libretro-common/include',
+    '-I' + meson.current_source_dir() / 'waterbox/glslang-include'],
+    language: ['c', 'cpp'])
+endif
+
 sources_sh = files('waterbox/sources.sh')
 core_sources = files(run_command(sources_sh, 'main', env: sources_env, check: true).stdout().strip().split('\n'))
 dep_sources = files(run_command(sources_sh, 'deps', env: sources_env, check: true).stdout().strip().split('\n'))
@@ -189,6 +206,28 @@ if meson.is_cross_build()
   mbuild = meson.get_external_property('minibox_build')
   sr = meson.get_external_property('guest_sysroot')
 
+  # The Vulkan renderer's sources and libraries. glslang compiles the GLSL
+  # Flycast writes into SPIR-V; the guest half of miniBox's Vulkan bridge is a
+  # wrapper per Vulkan command that hands the call to the frontend, generated
+  # from the SHARED list in miniBox.
+  vk_sources = []
+  vk_libs = []
+  if guest_vk
+    vk_sources = files(run_command(sources_sh, 'vulkan', env: sources_env, check: true).stdout().strip().split('\n')) + files('waterbox/vk-frontend.cpp')
+    # "-Dthread_local=": glslang keeps its allocator per thread. The guest has
+    # one thread that compiles shaders, so the variables are ordinary ones.
+    vk_libs += static_library('glslang',
+      files(run_command(sources_sh, 'glslang', env: sources_env, check: true).stdout().strip().split('\n')),
+      cpp_args: ['-DENABLE_OPT=0', '-Dthread_local=', '-w'])
+    vk_bridge = custom_target('vk-bridge',
+      output: ['vk-bridge-guest.c', 'vk-bridge-ops.h', 'vk-bridge-host.inc'],
+      command: [find_program('python3'), mbdir / 'source/vk/gen-vk-bridge.py',
+        mbdir / 'extern/vulkan-headers/registry/vk.xml',
+        mbdir / 'source/vk/vk-entry-points.txt', '@OUTDIR@'])
+    vk_libs += static_library('vk-bridge-guest', [files(mbdir / 'source/vk/vk-guest.c'), vk_bridge[0], vk_bridge[1]],
+      c_args: ['-I' + mbdir / 'source/vk', '-I' + mbdir / 'extern/vulkan-headers/include', '-I' + meson.current_build_dir()])
+  endif
+
   # Mesa, for the guest. Its static archives are linked in a group because they
   # refer to each other both ways, and the osmesa target's own object comes
   # separately: the shared library it belongs to cannot be built for a guest
@@ -207,10 +246,10 @@ if meson.is_cross_build()
       '-Wl,-u,pthread_mutexattr_destroy']
   endif
 
-  executable('core', core_sources + driver_sources + gl_bridge_src,
+  executable('core', core_sources + vk_sources + driver_sources + gl_bridge_src,
     name_suffix: 'wbx',
     include_directories: inc,
-    link_with: [deps_lib, refsw_lib],
+    link_with: [deps_lib, refsw_lib] + vk_libs,
     link_args: mesa_link + [
       '-static', '-no-pie',
       '-Wl,--eh-frame-hdr', '-Wl,-O2', '-Wl,--no-relax',

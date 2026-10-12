@@ -512,6 +512,66 @@ Chimera's firmware channel once the machine runs.
 
 ## Log
 
+- **2026-10-12** The Vulkan renderer (chimera issue 248; patches/0021,
+  `waterbox/vk-frontend.cpp`). The Renderer setting has a fourth value,
+  `vulkan-hw`: Flycast's own Vulkan renderer on the Vulkan device Chimera hands
+  a core (miniBox `source/vk`, Chimera 4ca6e30 or later). The default is still
+  `software`.
+  - *How it is put together.* Flycast has two Vulkan contexts: one built
+    around a window, one for a libretro frontend that owns the device. This
+    core uses the second and plays the frontend itself
+    (`waterbox/vk-frontend.cpp`): it makes the instance and the device through
+    the bridge and hands them over. The finished frame is copied into a buffer
+    and read back as the OpenGL one is. Shaders are compiled by glslang, built
+    into the core. No pipeline cache file is read or written.
+  - *Memory.* Through the bridge no memory is coherent: what the core writes
+    into mapped memory reaches the card only when it is flushed. Upstream
+    flushes only cached, non-coherent memory, and passed the allocation's
+    offset in its block as the offset in the allocation - wrong, and unseen on
+    a desktop where that branch is never taken. Here it drew a black picture.
+  - *After a load.* Every load is a new Vulkan device. The core lets go of the
+    renderer, the context, the device and the instance with the bridge made
+    silent (the handles are another device's), makes them again and goes on.
+    The picture the frontend is handed lives in the machine's own memory, so
+    a state carries it; the core fetches it when Chimera says a state is about
+    to be taken (`StateSaving`).
+  - *Two faults only games showed, both on a GTX 1060.* (1) Re-Volt's demo race
+    was one drawn frame late against OpenGL (frame N with Vulkan was frame N-2
+    with OpenGL, the memory identical). Upstream hands a frame over when the
+    game points the display at it; the OpenGL and software renderers of this
+    core hand it over in the field it was drawn. The Vulkan one now does the
+    same (`ScreenDrawer::ChimeraShowPending`), because a movie's picture must
+    not depend on the renderer. The 240p suite draws and shows in the same
+    field and could not show it. (2) Marvel vs. Capcom 2's memory card screen
+    had no blue background. It is one polygon with an 8x8 texture, and a
+    texture of up to 32 rows is written straight into the image's memory,
+    which stays mapped and was therefore never flushed. `vmallocator.h` now
+    flushes it. Found by printing the polygon list and the texture uploads of
+    both renderers side by side.
+  - *Measured on a GTX 1060 (Windows, chimera-run, no input, every frame
+    drawn).* Six games for 4000 frames, Vulkan against OpenGL: Re-Volt 18.3 s
+    against 17.6 s, Marvel vs. Capcom 2 9.0 against 8.6, Sonic Shuffle 18.6
+    against 17.9, Unreal Tournament 12.8 against 12.5, Donald Duck: Goin'
+    Quackers 13.0 against 12.7, Prince of Persia: Arabian Nights 15.2 against
+    14.9. System RAM is identical in all six. Four pictures a game were
+    compared: identical in four games, and within 0.9% of pixels (edges) in
+    Re-Volt and Donald Duck. At 2x Re-Volt takes 18.3 s against 17.7 s, with
+    the same memory. Thirty-six frames drawn right after a load are exactly
+    the frames first drawn (Re-Volt at two places, at 2x, and from states
+    nobody had looked at; Marvel vs. Capcom 2; Donald Duck), and with the core
+    left untold the first frame is wrong, as it should be. Eight rewinds of 250
+    frames end on the same picture and memory as an unbroken run.
+  - *Counted once with a debugger.* chimera-run does not say when the bridge
+    refuses a command (one sent with a handle of a device a load destroyed).
+    Over 120 loads on the software driver: none refused, the renderer made
+    121 times.
+  - *Not done.* No arcade board was run with Vulkan (no board's files were on
+    the test machine). The per-pixel sorting renderer (Vulkan OIT) is compiled
+    and not offered. A picture a game draws into a texture is on the card
+    only and is not carried across a load. No game was played with input.
+  - The test script: 54 pass, 0 fail, 9 skipped. Six checks are new (`vk:`),
+    each broken once and seen to fail; two of them need a game and were run
+    with Re-Volt and Marvel vs. Capcom 2.
 - **2026-10-09** The picture after a load, on a real card (chimera issue 190;
   patches/0020). Measured on a GTX 1060 with Re-Volt's demo race, which draws
   thirty times a second: the first frame after a load was the picture of the

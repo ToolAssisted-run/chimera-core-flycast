@@ -1,0 +1,329 @@
+diff --git a/core/hw/pvr/Renderer_if.cpp b/core/hw/pvr/Renderer_if.cpp
+--- a/core/hw/pvr/Renderer_if.cpp
++++ b/core/hw/pvr/Renderer_if.cpp
+@@ -431,7 +431,13 @@
+ 	 * GPU and without leaving the sandbox. Which one runs is a setting, so the
+ 	 * two can be compared on the same machine and the same frame.
+ 	 * See waterbox/gl-osmesa.cpp. */
+-#if defined(CHIMERA_GUEST_GL)
++#if defined(CHIMERA_GUEST_VK)
++	// chimera: ...or the Vulkan renderer, on the device Chimera hands the core
++	// (the Renderer setting's "vulkan-hw", waterbox/vk-frontend.cpp)
++	extern bool chimera_gl_available();
++	extern bool chimera_vk_renderer();
++	renderer	 = chimera_vk_renderer() ? rend_Vulkan() : chimera_gl_available() ? rend_GLES2() : rend_refsw();
++#elif defined(CHIMERA_GUEST_GL)
+ 	extern bool chimera_gl_available();
+ 	renderer	 = chimera_gl_available() ? rend_GLES2() : rend_refsw();
+ #else
+diff --git a/core/rend/vulkan/buffer.cpp b/core/rend/vulkan/buffer.cpp
+--- a/core/rend/vulkan/buffer.cpp
++++ b/core/rend/vulkan/buffer.cpp
+@@ -45,8 +45,16 @@
+ 			allocInfo.requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+ 			if (propertyFlags & vk::MemoryPropertyFlagBits::eHostCached)
+ 				allocInfo.preferredFlags |= VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
++#ifdef CHIMERA_GUEST_VK
++			// chimera: through Chimera's Vulkan bridge no memory type is coherent,
++			// and a mapping is a copy in the core's memory (vmallocator.h flushes
++			// and invalidates it). Cached memory is quick to copy out of on the
++			// host; write-combined memory is not.
++			allocInfo.preferredFlags |= VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
++#else
+ 			if (propertyFlags & vk::MemoryPropertyFlagBits::eHostCoherent)
+ 				allocInfo.preferredFlags |= VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
++#endif
+ 		}
+ 	}
+ 	allocation = context->GetAllocator().AllocateForBuffer(*buffer, allocInfo);
+diff --git a/core/rend/vulkan/drawer.h b/core/rend/vulkan/drawer.h
+--- a/core/rend/vulkan/drawer.h
++++ b/core/rend/vulkan/drawer.h
+@@ -320,6 +320,25 @@
+ 		return true;
+ 	}
+ 
++#ifdef CHIMERA_GUEST_VK
++	// chimera: a frame that has been drawn is handed to the context at the end
++	// of the field it was drawn in, not when the game later points the display
++	// at it. That is when this core's OpenGL and software renderers hand
++	// theirs out, and a movie's picture must not depend on the renderer. It
++	// counts as shown: the game's own flip then finds nothing new. False when
++	// nothing was drawn since the last one shown.
++	bool ChimeraShowPending()
++	{
++		EndRenderPass();
++		if (!frameRendered)
++			return false;
++		frameRendered = false;
++		GetContext()->PresentFrame(colorAttachments[GetCurrentImage()]->GetImage(),
++				colorAttachments[GetCurrentImage()]->GetImageView(), viewport, aspectRatio);
++		return true;
++	}
++#endif
++
+ protected:
+ 	vk::CommandBuffer BeginRenderPass() override;
+ 	u32 GetSwapChainSize() override { return 2; }
+diff --git a/core/rend/vulkan/vk_context_lr.cpp b/core/rend/vulkan/vk_context_lr.cpp
+--- a/core/rend/vulkan/vk_context_lr.cpp
++++ b/core/rend/vulkan/vk_context_lr.cpp
+@@ -338,8 +338,17 @@
+ 	descriptorPool = device.createDescriptorPoolUnique(vk::DescriptorPoolCreateInfo(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,
+ 			40000, pool_sizes));
+ 
++#ifdef CHIMERA_GUEST_VK
++	// chimera: no file for the driver's pipeline cache. What a driver writes
++	// there is that computer's, and a file of the machine is part of every
++	// savestate; and it is asked for when the context goes (term), which after
++	// a savestate is loaded is from a device no longer there to answer.
++	FILE *f = nullptr;
++	std::string cachePath;
++#else
+ 	std::string cachePath = hostfs::getShaderCachePath("vulkan_pipeline.cache");
+ 	FILE *f = fopen(cachePath.c_str(), "rb");
++#endif
+ 	if (f == nullptr)
+ 		pipelineCache = device.createPipelineCacheUnique(vk::PipelineCacheCreateInfo());
+ 	else
+@@ -406,7 +415,14 @@
+ 	if (image == vk::Image())
+ 		return;
+ 	float shiftX, shiftY;
++#ifdef CHIMERA_GUEST_VK
++	// chimera: the picture where the machine put it, as this core's other
++	// renderers hand it over (the libretro port moves it by the video output's
++	// start position: one row down in the 240p suite's menu)
++	shiftX = shiftY = 0.f;
++#else
+ 	getVideoShift(shiftX, shiftY);
++#endif
+ 
+ 	beginFrame(extent, image);
+ 	QuadVertex vtx[4] {
+@@ -461,6 +477,10 @@
+ 	{
+ 		colorAttachments[currentImage] = std::make_unique<FramebufferAttachment>(physicalDevice, device);
+ 		colorAttachments[currentImage]->Init(extent.width, extent.height, vk::Format::eR8G8B8A8Unorm,
++#ifdef CHIMERA_GUEST_VK
++				// (read back by the core, through the buffer this usage gives the attachment)
++				vk::ImageUsageFlagBits::eTransferSrc |
++#endif
+ 				vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eSampled,
+ 				"COLOR ATTACHMENT " + std::to_string(currentImage));
+ 		vk::ImageView imageView = colorAttachments[currentImage]->GetImageView();
+@@ -515,17 +535,72 @@
+ 				barrier
+ 		);
+ 	}
++#ifdef CHIMERA_GUEST_VK
++	// chimera: the finished frame, copied into the attachment's own buffer for
++	// GetLastFrame below.
++	{
++		const int current = GetCurrentImageIndex();
++		FramebufferAttachment *attachment = current < (int)colorAttachments.size() ? colorAttachments[current].get() : nullptr;
++		if (attachment != nullptr && attachment->GetBufferData() != nullptr)
++		{
++			const vk::Extent2D extent = attachment->getExtent();
++			setImageLayout(cmdBuffer, attachment->GetImage(), vk::Format::eR8G8B8A8Unorm, 1,
++					vk::ImageLayout::eShaderReadOnlyOptimal, vk::ImageLayout::eTransferSrcOptimal);
++			vk::BufferImageCopy region(0, extent.width, extent.height,
++					vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, 0, 0, 1),
++					vk::Offset3D(0, 0, 0), vk::Extent3D(extent, 1));
++			cmdBuffer.copyImageToBuffer(attachment->GetImage(), vk::ImageLayout::eTransferSrcOptimal,
++					*attachment->GetBufferData()->buffer, region);
++			setImageLayout(cmdBuffer, attachment->GetImage(), vk::Format::eR8G8B8A8Unorm, 1,
++					vk::ImageLayout::eTransferSrcOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
++			chimeraLastImage = current;
++		}
++	}
++#endif
+ 	cmdBuffer.end();
+ 	cmdBuffer = nullptr;
+ 	commandPool.EndFrame();
+ }
+ 
++#ifdef CHIMERA_GUEST_VK
++bool VulkanContext::GetLastFrame(std::vector<u8>& data, int& width, int& height)
++{
++	if (chimeraLastImage < 0 || chimeraLastImage >= (int)colorAttachments.size())
++		return false;
++	FramebufferAttachment *attachment = colorAttachments[chimeraLastImage].get();
++	if (attachment == nullptr || attachment->GetBufferData() == nullptr)
++		return false;
++	// the copy is in the commands of the frame that drew it
++	queue.waitIdle();
++	const vk::Extent2D extent = attachment->getExtent();
++	width = (int)extent.width;
++	height = (int)extent.height;
++	static std::vector<u8> rgba;
++	rgba.resize((size_t)width * height * 4);
++	attachment->GetBufferData()->download((u32)rgba.size(), rgba.data());
++	data.resize((size_t)width * height * 3);
++	const u8 *src = rgba.data();
++	u8 *dst = data.data();
++	for (size_t i = 0, n = (size_t)width * height; i < n; i++, src += 4, dst += 3)
++	{
++		dst[0] = src[0];
++		dst[1] = src[1];
++		dst[2] = src[2];
++	}
++	return true;
++}
++#endif
++
+ void VulkanContext::term()
+ {
+ 	if (device)
+ 	{
+ 		device.waitIdle();
++#ifdef CHIMERA_GUEST_VK
++		if (false)
++#else
+ 		if (pipelineCache)
++#endif
+ 		{
+ 			std::vector<u8> cacheData = device.getPipelineCacheData(*pipelineCache);
+ 			if (!cacheData.empty())
+diff --git a/core/rend/vulkan/vk_context_lr.h b/core/rend/vulkan/vk_context_lr.h
+--- a/core/rend/vulkan/vk_context_lr.h
++++ b/core/rend/vulkan/vk_context_lr.h
+@@ -41,7 +41,16 @@
+ 
+ 	u32 GetGraphicsQueueFamilyIndex() const { return retro_render_if->queue_index; }
+ 	void PresentFrame(vk::Image image, vk::ImageView imageView, const vk::Extent2D& extent, float aspectRatio);
++#ifdef CHIMERA_GUEST_VK
++	// chimera: a libretro frontend is handed the finished image. The Chimera
++	// core has nobody to hand it to: endFrame copies it into a buffer, and
++	// this reads the buffer (vk_context_lr.cpp). RGB rows, top row first.
++	bool GetLastFrame(std::vector<u8>& data, int& width, int& height);
++	// which of the two images GetLastFrame reads (-1: none yet)
++	int chimeraLastImage = -1;
++#else
+ 	bool GetLastFrame(std::vector<u8>& data, int& width, int& height) { return false; }
++#endif
+ 
+ 	vk::PhysicalDevice GetPhysicalDevice() const { return physicalDevice; }
+ 	vk::Device GetDevice() const { return device; }
+diff --git a/core/rend/vulkan/vmallocator.cpp b/core/rend/vulkan/vmallocator.cpp
+--- a/core/rend/vulkan/vmallocator.cpp
++++ b/core/rend/vulkan/vmallocator.cpp
+@@ -73,6 +73,12 @@
+ 	allocatorInfo.pVulkanFunctions = &vulkanFunctions;
+ #endif
+ 
++#ifdef CHIMERA_GUEST_VK
++	// chimera: a block that holds one mapped buffer is mapped whole, and through
++	// Chimera's Vulkan bridge a mapped byte is a byte of the core's own memory -
++	// in every savestate, and copied when the mapping is made.
++	allocatorInfo.preferredLargeHeapBlockSize = 16 * 1024 * 1024;
++#endif
+ 	VkResult rc = vmaCreateAllocator(&allocatorInfo, &allocator);
+ 	vk::detail::resultCheck(static_cast<vk::Result>(rc), "vmaCreateAllocator failed");
+ }
+diff --git a/core/rend/vulkan/vmallocator.h b/core/rend/vulkan/vmallocator.h
+--- a/core/rend/vulkan/vmallocator.h
++++ b/core/rend/vulkan/vmallocator.h
+@@ -74,18 +74,53 @@
+ 		vk::detail::resultCheck(static_cast<vk::Result>(res), "vmaMapMemory failed");
+ 		VkMemoryPropertyFlags flags;
+ 		vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
++#ifdef CHIMERA_GUEST_VK
++		// chimera: whatever is not coherent, cached or not
++		if ((flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
++#else
+ 		if ((flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
++#endif
++#ifdef CHIMERA_GUEST_VK
++			// chimera: the range is counted from the start of the ALLOCATION.
++			// allocInfo.offset is where the allocation sits in its block, and
++			// passing it flushed (or invalidated) some other bytes - which no
++			// desktop sees, where this memory is coherent and the branch is
++			// not taken, and which drew a black picture here.
++			vmaInvalidateAllocation(allocator, allocation, 0, VK_WHOLE_SIZE);
++#else
+ 			vmaInvalidateAllocation(allocator, allocation, allocInfo.offset, allocInfo.size);
++#endif
+ 		return p;
+ 	}
+ 	void UnmapMemory() const
+ 	{
++#ifdef CHIMERA_GUEST_VK
++		// chimera: memory that stays mapped (a small texture's image, written
++		// in place) is not coherent through Chimera's Vulkan bridge either. It
++		// is not unmapped here, and what was written still has to be sent.
++		// Without this such a texture stayed black: Marvel vs. Capcom 2's
++		// background is one polygon with an 8x8 texture.
++		if (allocInfo.pMappedData != nullptr)
++		{
++			vmaFlushAllocation(allocator, allocation, 0, VK_WHOLE_SIZE);
++			return;
++		}
++#endif
+ 		if (allocInfo.pMappedData != nullptr)
+ 			return;
+ 		VkMemoryPropertyFlags flags;
+ 		vmaGetMemoryTypeProperties(allocator, allocInfo.memoryType, &flags);
++#ifdef CHIMERA_GUEST_VK
++		// chimera: whatever is not coherent, cached or not
++		if ((flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
++#else
+ 		if ((flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) && (flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) == 0)
++#endif
++#ifdef CHIMERA_GUEST_VK
++			vmaFlushAllocation(allocator, allocation, 0, VK_WHOLE_SIZE);
++#else
+ 			vmaFlushAllocation(allocator, allocation, allocInfo.offset, allocInfo.size);
++#endif
+ 		vmaUnmapMemory(allocator, allocation);
+ 	}
+ 
+diff --git a/core/rend/vulkan/vulkan_context.h b/core/rend/vulkan/vulkan_context.h
+--- a/core/rend/vulkan/vulkan_context.h
++++ b/core/rend/vulkan/vulkan_context.h
+@@ -81,7 +81,10 @@
+ };
+ #endif
+ 
+-#ifdef LIBRETRO
++// chimera: a sandbox has no window, so the Chimera core compiles the context
++// the libretro port uses - handed a device, drawing into images of its own -
++// and plays its frontend itself (waterbox/vk-frontend.cpp, chimera issue 248).
++#if defined(LIBRETRO) || defined(CHIMERA_GUEST_VK)
+ #include "vk_context_lr.h"
+ #else
+ 
+diff --git a/core/rend/vulkan/vulkan_renderer.cpp b/core/rend/vulkan/vulkan_renderer.cpp
+--- a/core/rend/vulkan/vulkan_renderer.cpp
++++ b/core/rend/vulkan/vulkan_renderer.cpp
+@@ -355,6 +355,10 @@
+ private:
+ 	SamplerManager samplerManager;
+ 	ScreenDrawer screenDrawer;
++#ifdef CHIMERA_GUEST_VK
++public:
++	bool ChimeraShowPending() { return !config::EmulateFramebuffer && !framebufferRendered && screenDrawer.ChimeraShowPending(); }
++#endif
+ 	TextureDrawer textureDrawer;
+ 	bool emulateFramebuffer = false;
+ };
+@@ -364,6 +368,19 @@
+ 	return new VulkanRenderer();
+ }
+ 
++#ifdef CHIMERA_GUEST_VK
++// chimera: see ScreenDrawer::ChimeraShowPending (drawer.h)
++bool chimera_vk_show_pending_frame()
++{
++	VulkanRenderer *vkrenderer = dynamic_cast<VulkanRenderer*>(renderer);
++	try {
++		return vkrenderer != nullptr && vkrenderer->ChimeraShowPending();
++	} catch (const vk::SystemError&) {
++		return false;
++	}
++}
++#endif
++
+ void ReInitOSD()
+ {
+ 	if (renderer != nullptr) {

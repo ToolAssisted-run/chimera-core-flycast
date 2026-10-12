@@ -77,22 +77,26 @@ sudo apt-get install -y --no-install-recommends \
   the system meson is used and no venv is made.
 - miniBox builds the guest C and C++ toolchain from the Chimera submodule.
 - Everything else is source: this repository, the `extern/flycast` submodule
-  and two of Flycast's own submodules (libchdr and xbyak).
+  and five of Flycast's own submodules: libchdr and xbyak, and for the Vulkan
+  renderer the Vulkan headers, the Vulkan Memory Allocator and glslang (the
+  compiler that turns the renderer's shaders into what a Vulkan driver takes).
 
 ## Get the sources
 
 CI checks this repository out with `actions/checkout@v6` and
-`submodules: true`, then fetches the two nested submodules the core compiles.
+`submodules: true`, then fetches the five nested submodules the core compiles.
 By hand:
 
 ```sh
 git clone https://github.com/ToolAssisted-run/chimera-core-flycast.git
 cd chimera-core-flycast
 git submodule update --init
-git -C extern/flycast submodule update --init --recursive --depth 1 core/deps/libchdr core/deps/xbyak
+git -C extern/flycast submodule update --init --recursive --depth 1 \
+  core/deps/libchdr core/deps/xbyak \
+  core/deps/Vulkan-Headers core/deps/VulkanMemoryAllocator core/deps/glslang
 ```
 
-Flycast has many more submodules (SDL, Vulkan headers, breakpad, asio). They
+Flycast has many more submodules (SDL, breakpad, asio). They
 belong to the desktop application and are never fetched; see
 `waterbox/sources.sh`.
 
@@ -217,9 +221,12 @@ ninja -C build/meson-guest
 - With it: Flycast's own OpenGL renderer is built and linked against the
   guest Mesa, and the guest half of Chimera's GPU bridge is generated
   (miniBox's `source/gl/gen-gl-bridge.py`, from `waterbox/gl-entry-points.txt`)
-  and compiled in. The core then offers three renderers: `software`,
-  `opengl` (softpipe, inside the sandbox) and `opengl-hw` (the same renderer
-  with its calls leaving the sandbox to the host's GPU through the bridge).
+  and compiled in. The core then offers four renderers: `software`,
+  `opengl` (softpipe, inside the sandbox), `opengl-hw` (the same renderer
+  with its calls leaving the sandbox to the host's GPU through the bridge)
+  and `vulkan-hw`: Flycast's Vulkan renderer, built with glslang and linked
+  against the guest half of miniBox's Vulkan bridge (`source/vk`), on the
+  Vulkan device Chimera hands the core. It needs Chimera at 4ca6e30 or later.
 - Without it: only the reference software rasteriser is built.
 
 ## Build the package
@@ -327,12 +334,24 @@ Skipped without content or without Chimera:
 | `naomi2:*` | `FLYCAST_NAOMI2_ROMS`, a folder holding `naomi2.zip` and one game |
 | `atomiswave:*` | `FLYCAST_AW_ROMS`, a folder holding `awbios.zip` and one game |
 | `disc:columns`, `ports:columns`, `gl:rebuild-at-zero` | `<chimera>/build/meson-linux/chimera-run` and the installed `<chimera>/build/Cores/flycast.chimeraCore` |
+| `vk:bridge`, `vk:picture`, `vk:rerecord`, `vk:picture-after-load` | the same two, and a Vulkan driver on this computer. One that draws on the processor will do: `sudo apt-get install libvulkan1 mesa-vulkan-drivers` |
+| `vk:frame-on-time` | all of that and `FLYCAST_GFX_DISC`, a game that draws thirty times a second; `FLYCAST_VK_FRAME` names a frame where its picture moves (default 3996, in Re-Volt's demo race) |
+| `vk:small-texture` | all of that and `FLYCAST_VK_TEXTURE_DISC`, a game that draws with a texture of 32 rows or fewer; `FLYCAST_VK_TEXTURE_FRAME` names the frame (default 1800, Marvel vs. Capcom 2's memory card screen) |
 
-The last three look for Chimera in `$CHIMERA_ROOT`, then `chimera-checkout/`
+The last nine look for Chimera in `$CHIMERA_ROOT`, then `chimera-checkout/`
 in this repository, `../../chimera`, `../chimera` and `$HOME/chimera`. CI's
 `core-gate` job builds neither Chimera nor the package, so they are skipped
-there. `gl:rebuild-at-zero` is also skipped when the machine gives the GPU
-bridge no GL context.
+there: the Vulkan renderer is compiled by CI and tested only where somebody
+runs this script beside a built Chimera. `gl:rebuild-at-zero` is also skipped
+when the machine gives the GPU bridge no GL context, and the six `vk:` checks
+when it hands the core no Vulkan device.
+
+The first four `vk:` checks run the 240p Test Suite's menu under the Vulkan
+renderer: the machine's memory and the picture are OpenGL's, a state saved and
+loaded around every frame changes neither, and frames drawn after a load are
+the pictures they were. The last two need a game each, because each holds a
+fault that only a game showed: a frame shown one drawn frame late, and a small
+texture that stayed black. `docs/PLAN.md` (2026-10-12) has both.
 
 ### The frontend gate
 
@@ -417,7 +436,7 @@ its picture is not deterministic.
   "The guest Mesa" above. What matters is the final `mesa: ready` line.
 - **`pass -Dminibox_dir=<miniBox checkout>`** (meson). `meson.build` found no
   miniBox at `../chimera/extern/chimera-common-minibox`. Pass the option.
-- **git rejects `core/deps/libchdr` or `core/deps/xbyak` as a pathspec.**
+- **git rejects `core/deps/libchdr` (or another `core/deps/...`) as a pathspec.**
   They are submodules of Flycast, not of this repository. Use
   `git -C extern/flycast submodule update ...` as shown above.
 - **`extern/flycast is partly patched`** (`apply-patches.sh`). A patched file

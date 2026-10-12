@@ -53,6 +53,51 @@ bool chimera_gl_bridge_offered();
  * knows which one was asked for. */
 static bool g_glUp;
 bool chimera_gl_available() { return g_glUp; }
+
+/* The Renderer setting's "vulkan-hw" (chimera issue 248): Flycast's Vulkan
+ * renderer on the Vulkan device Chimera hands the core. waterbox/vk-frontend.cpp
+ * has the device, the context and the rebuild after a load; this file decides
+ * when. g_vkDevice is the device the renderer's objects were made on - in
+ * emulated memory, so that a load brings back the value the state was made
+ * under - and g_vkStateLoaded is set after every load and read at the head of
+ * the next frame. */
+static bool g_vkUp;
+bool chimera_vk_renderer() { return g_vkUp; }
+#if defined(CHIMERA_GUEST_VK)
+extern "C" {
+void chimera_vk_bridge_offer(uint64_t addr);
+int chimera_vk_bridge_offered(void);
+int chimera_vk_start(void);
+uint64_t chimera_vk_device_now(void);
+int chimera_vk_rebuild(void);
+void chimera_vk_frame_taken(void);
+}
+static uint64_t g_vkDevice;
+static bool g_vkStateLoaded;
+/* The picture across a load (StateSaving, GetVideoBgra): g_vkFetched says
+ * g_video already holds this frame's picture. Both are in emulated memory, so
+ * a load brings them back. */
+bool chimera_vk_show_pending_frame();
+static bool g_vkFetched;
+
+static void ChimeraCheckVulkanDevice()
+{
+	if (!g_vkUp)
+		return;
+	const bool afterLoad = g_vkStateLoaded;
+	g_vkStateLoaded = false;
+	const uint64_t live = chimera_vk_device_now();
+	/* 0 is "cannot tell", and a renderer that cannot tell assumes nothing moved */
+	if (live == 0)
+		return;
+	if (live != g_vkDevice && (g_vkDevice != 0 || afterLoad))
+	{
+		if (!chimera_vk_rebuild())
+			fprintf(stderr, "chimera: the Vulkan renderer could not be made again after a load\n");
+	}
+	g_vkDevice = live;
+}
+#endif
 #endif
 #include "hw/maple/maple_cfg.h"
 #include "hw/maple/maple_if.h"
@@ -902,8 +947,32 @@ ECL_EXPORT int Init(void)
 		 * bringing Mesa up first moves every allocation Flycast then makes,
 		 * and addrspace::initMappings wrote off the end of the guest. */
 		{
-			static const char *const renderers[] = { "software", "opengl", "opengl-hw" };
-			const int choice = SettingIndex("renderer", renderers, 3, 0);
+			static const char *const renderers[] = { "software", "opengl", "opengl-hw", "vulkan-hw" };
+			const int choice = SettingIndex("renderer", renderers, 4, 0);
+			if (choice == 3)
+			{
+				/* "vulkan-hw": Flycast's Vulkan renderer on the graphics card.
+				 * It has nothing to fall back on that the project agreed to. */
+#if defined(CHIMERA_GUEST_VK)
+				if (!chimera_vk_bridge_offered())
+				{
+					snprintf(g_loadError, sizeof(g_loadError),
+						"the renderer setting is vulkan-hw, and no Vulkan was handed over (this computer may have no Vulkan "
+						"driver, or this Chimera is older than its Vulkan bridge).");
+					return 0;
+				}
+				g_vkUp = chimera_vk_start() != 0;
+				if (!g_vkUp)
+				{
+					snprintf(g_loadError, sizeof(g_loadError), "the Vulkan renderer would not start.");
+					return 0;
+				}
+				config::RendererType = RenderType::Vulkan;
+#else
+				snprintf(g_loadError, sizeof(g_loadError), "the renderer setting is vulkan-hw, and this build has no Vulkan renderer.");
+				return 0;
+#endif
+			}
 			if (choice == 2 && chimera_gl_bridge_offered())
 			{
 				/* "opengl-hw": the same renderer, drawing on a GPU outside the
@@ -912,7 +981,7 @@ ECL_EXPORT int Init(void)
 				if (!g_glUp)
 					fprintf(stderr, "chimera: the GPU bridge would not start, falling back\n");
 			}
-			if (!g_glUp && choice >= 1)
+			if (!g_glUp && (choice == 1 || choice == 2))
 			{
 				/* Either "opengl", or "opengl-hw" on a Chimera that offered no
 				 * bridge - which is any build without one, and any machine
@@ -951,7 +1020,7 @@ ECL_EXPORT int Init(void)
 		 * Neither applies without one of the OpenGL renderers: the reference
 		 * rasteriser beside them draws the machine's own 640x480 and samples
 		 * the way the PVR does, and has no knob for either. */
-		if (g_glUp)
+		if (g_glUp || g_vkUp)
 		{
 			static const char *const scales[] = { "1x", "2x", "3x" };
 			g_videoScale = SettingIndex("internalResolution", scales, MAX_SCALE, 0) + 1;
@@ -981,7 +1050,7 @@ ECL_EXPORT int Init(void)
 			const int sort = SettingIndex("transparentSorting", sorting, 3, 0);
 			config::PerStripSorting = sort == 1;
 #if defined(CHIMERA_GUEST_GL)
-			chimera_per_pixel_sort = sort == 2 && !g_glUp;
+			chimera_per_pixel_sort = sort == 2 && !g_glUp && !g_vkUp;
 #else
 			chimera_per_pixel_sort = sort == 2;
 #endif
@@ -1130,6 +1199,15 @@ ECL_EXPORT void SetAxis(int index, int value)
 
 ECL_EXPORT void FrameAdvance(uint64_t packed)
 {
+#if defined(CHIMERA_GUEST_VK)
+	/* before the machine steps: has a load left the Vulkan renderer's objects
+	 * on a device that is gone? And the frame about to be drawn goes into the
+	 * context's other image. */
+	ChimeraCheckVulkanDevice();
+	if (g_vkUp)
+		chimera_vk_frame_taken();
+	g_vkFetched = false;
+#endif
 	/* Two input channels, and a frame is the UNION of them: the first 64
 	 * buttons arrive packed in this call, while the gate harness (and any
 	 * controller wider than 64) drives SetButton.
@@ -1264,7 +1342,7 @@ static void RotateForCabinet()
 ECL_EXPORT uint32_t *GetVideoBgra(void)
 {
 #if defined(CHIMERA_GUEST_GL)
-	if (chimera_gl_available())
+	if (chimera_gl_available() || g_vkUp)
 	{
 		/* Flycast already knows how to get its own picture back: the renderer
 		 * keeps it in a framebuffer of its own and hands it over through
@@ -1273,7 +1351,29 @@ ECL_EXPORT uint32_t *GetVideoBgra(void)
 		 * rows; the frontend wants BGRA. */
 		static std::vector<u8> rgb;
 		int w = 0, h = 0;
-		if (renderer != nullptr && renderer->GetLastFrame(rgb, w, h) && w > 0 && h > 0)
+		bool have = false;
+#if defined(CHIMERA_GUEST_VK)
+		/* (Vulkan) already fetched for this frame, by StateSaving below: what
+		 * the renderer would hand out now may be a frame not yet shown */
+		if (g_vkUp && g_vkFetched)
+			return g_video;
+		/* (Vulkan) between a load and the next frame the renderer's objects
+		 * are a device's that is gone: the picture is the one the state
+		 * brought */
+		if (g_vkUp && chimera_vk_device_now() != g_vkDevice)
+			return g_video;
+#endif
+#if defined(CHIMERA_GUEST_VK)
+		/* (Vulkan) upstream shows a frame when the game points the display at
+		 * it, a field or two after drawing it. The OpenGL and software
+		 * renderers of this core hand a frame out in the field it was drawn,
+		 * so the Vulkan one is made to: the same movie shows the same picture
+		 * on the same frame whichever draws it. */
+		if (g_vkUp && renderer != nullptr)
+			chimera_vk_show_pending_frame();
+#endif
+		have = renderer != nullptr && renderer->GetLastFrame(rgb, w, h) && w > 0 && h > 0;
+		if (have)
 		{
 			/* the frame the renderer drew, at whatever internalResolution
 			 * asked for - never larger than the buffer declared for the
@@ -1319,7 +1419,13 @@ ECL_EXPORT void SetRenderingEnabled(int on) { chimera_render_enabled = on != 0; 
  * BEFORE the renderer ever looked is the one that was believed and should not
  * have been (chimera issue 126). Set after the load, so the load cannot wipe
  * it - and this flag is invisible memory, so it could not anyway. */
-ECL_EXPORT void StateLoaded(void) { chimera_gl_state_loaded = 1; }
+ECL_EXPORT void StateLoaded(void)
+{
+	chimera_gl_state_loaded = 1;
+#if defined(CHIMERA_GUEST_VK)
+	g_vkStateLoaded = true;
+#endif
+}
 
 /* Told before every state the engine takes, the machine stopped between two
  * frames. The GL renderer keeps one thing a state does not hold and a load
@@ -1337,6 +1443,25 @@ ECL_EXPORT void StateSaving(void)
 #if defined(CHIMERA_GUEST_GL)
 	if (chimera_gl_available() && renderer != nullptr)
 		chimera_gl_state_saving();
+#endif
+#if defined(CHIMERA_GUEST_VK)
+	/* The Vulkan renderer's last frame is an image on the card, and a load
+	 * leaves the renderer on a new device with no frame at all. The picture
+	 * the frontend is handed lives in g_video, which IS in a state: so the
+	 * frame is fetched into it now, and after a load GetVideoBgra goes on
+	 * handing out that picture until the game draws another. Not when the
+	 * renderer's objects are another device's - a state taken after a load
+	 * and before the next frame, where g_video is already what the load
+	 * brought. */
+	if (g_vkUp && renderer != nullptr)
+	{
+		const uint64_t live = chimera_vk_device_now();
+		if (live != 0 && live == g_vkDevice)
+		{
+			GetVideoBgra();   /* shows a frame drawn and not yet handed out, too */
+			g_vkFetched = true;
+		}
+	}
 #endif
 }
 
@@ -1516,6 +1641,15 @@ ECL_EXPORT const uint8_t *GetSaveDataFileBuffer(int32_t i)
 ECL_EXPORT void SetGpuBridge(uint64_t addr)
 {
 	chimera_gl_bridge_offer((uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t))addr);
+}
+#endif
+
+#if defined(CHIMERA_GUEST_VK)
+/* The Vulkan bridge, offered beside the OpenGL one and before Init; the
+ * Renderer setting decides whether it is used ("vulkan-hw"). */
+ECL_EXPORT void SetVulkanBridge(uint64_t addr)
+{
+	chimera_vk_bridge_offer(addr);
 }
 #endif
 

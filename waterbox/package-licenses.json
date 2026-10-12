@@ -37,6 +37,34 @@
       "license": "BSD-2-Clause",
       "url": "https://github.com/Cyan4973/xxHash",
       "file": "extern/flycast/core/deps/xxHash/LICENSE"
+    },
+    {
+      "name": "glslang",
+      "license": "BSD-3-Clause, BSD-2-Clause, MIT and Apache-2.0, with its generated parser under GPL-3.0 with the Bison exception",
+      "url": "https://github.com/KhronosGroup/glslang",
+      "file": "extern/flycast/core/deps/glslang/LICENSE.txt",
+      "note": "A submodule of Flycast. The compiler that turns the GLSL Flycast writes for its Vulkan renderer into SPIR-V: the front end and the SPIR-V writer, without the optimiser and without HLSL. Used only when the Renderer setting is vulkan-hw."
+    },
+    {
+      "name": "Vulkan Memory Allocator",
+      "license": "MIT",
+      "url": "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator",
+      "file": "extern/flycast/core/deps/VulkanMemoryAllocator/LICENSE.txt",
+      "note": "A submodule of Flycast. Used only when the Renderer setting is vulkan-hw."
+    },
+    {
+      "name": "Vulkan-Headers",
+      "license": "Apache-2.0 or MIT",
+      "url": "https://github.com/KhronosGroup/Vulkan-Headers",
+      "file": "extern/flycast/core/deps/Vulkan-Headers/LICENSE.md",
+      "note": "A submodule of Flycast: the Khronos headers and C++ bindings its Vulkan renderer is compiled against."
+    },
+    {
+      "name": "libretro-common (one header, libretro_vulkan.h)",
+      "license": "MIT",
+      "url": "https://github.com/libretro/libretro-common",
+      "file": "extern/flycast/core/deps/libretro-common/include/libretro_vulkan.h",
+      "note": "The interface Flycast's windowless Vulkan context is handed its device through. Its licence is the comment at its top."
     }
   ]
 }

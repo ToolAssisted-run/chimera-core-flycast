@@ -16,6 +16,7 @@ authoritative build recipe; `docs/BUILDING.md` explains it step by step.
 - `waterbox/cinterface.cpp` - the adapter between Flycast and the guest ABI.
 - `waterbox/refsw/`, `waterbox/refsw-renderer.cpp` - the software rasteriser (vendored, BSD-3-Clause).
 - `waterbox/gl-osmesa.cpp`, `waterbox/gl-bridged.cpp`, `waterbox/gl-entry-points.txt` - OpenGL in the sandbox, and the GPU bridge's guest half.
+- `waterbox/vk-frontend.cpp`, `waterbox/glslang-include/` - the Vulkan renderer's device, made on the Vulkan Chimera hands over (miniBox `source/vk`), and what glslang needs to build.
 - `waterbox/run-native.c`, `waterbox/run-wbx.c`, `waterbox/gate-harness.h` - the native reference and the sandbox driver.
 - `waterbox/apply-patches.sh`, `setup-mesa.sh`, `setup-guest.sh`, `build-package.sh`, `run-gate.sh` - the build and the core gate.
 - `waterbox/waterbox.config`, `file_slots.json`, `default_keybinds.json`, `package-licenses.json` - what the package declares to Chimera.
@@ -121,8 +122,9 @@ Linux and on Windows.
 - **Determinism is the product.** The guest must not read host time, host
   randomness or anything else that differs between runs, and a savestate
   must round-trip. The gate checks both; a change that breaks either is a
-  bug. Only the `opengl-hw` renderer is declared non-deterministic
-  (`waterbox.config`): its picture comes from the host's GPU.
+  bug. Only the `opengl-hw` and `vulkan-hw` renderers are declared
+  non-deterministic (`waterbox.config`): their picture comes from the host's
+  GPU.
 - **Run the gate before committing.** A new check needs a negative control:
   show that it fails when the thing it checks is broken.
 - **Never commit game files, BIOS or firmware.** `tests/roms/` holds only

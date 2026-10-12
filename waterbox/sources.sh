@@ -136,8 +136,32 @@ deps_srcs() {
 	echo "$fc/core/deps/chdpsr/cdipsr.cpp"
 }
 
+# The Vulkan renderer (chimera issue 248), for the guest only: what it draws
+# with is the Vulkan device Chimera hands the core. Flycast has two contexts
+# for it - one built around a window and its swapchain (vulkan_context.cpp),
+# and the libretro port's (vk_context_lr.cpp), which is handed a device and
+# draws into images of its own. A sandbox has no window, so it is the second
+# that is compiled, with waterbox/vk-frontend.cpp playing the frontend.
+# adreno.cpp loads a phone's driver.
+vulkan_srcs() {
+	ls "$fc"/core/rend/vulkan/*.cpp | grep -v -e "/vulkan_context.cpp$" -e "/adreno.cpp$"
+	ls "$fc"/core/rend/vulkan/oit/*.cpp
+}
+
+# glslang, which turns the GLSL Flycast writes into SPIR-V: the front end and
+# the SPIR-V writer, without the optimiser (SPIRV-Tools) and without HLSL.
+glslang_srcs() {
+	g="$fc/core/deps/glslang"
+	find "$g/glslang/MachineIndependent" "$g/glslang/GenericCodeGen" -name '*.cpp'
+	echo "$g/glslang/OSDependent/Unix/ossource.cpp"
+	echo "$g/glslang/ResourceLimits/ResourceLimits.cpp"
+	find "$g/SPIRV" -maxdepth 1 -name '*.cpp' | grep -v -e "/SpvTools.cpp$"
+}
+
 case "${1:-main}" in
 	main) { hw_srcs; core_srcs; } | sort ;;
 	deps) deps_srcs | sort ;;
-	*) echo "usage: sources.sh [main|deps]" >&2; exit 2 ;;
+	vulkan) vulkan_srcs | sort ;;
+	glslang) glslang_srcs | sort ;;
+	*) echo "usage: sources.sh [main|deps|vulkan|glslang]" >&2; exit 2 ;;
 esac
