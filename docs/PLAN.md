@@ -512,6 +512,17 @@ Chimera's firmware channel once the machine runs.
 
 ## Log
 
+- **2026-10-14** The default bindings name keys Chimera sends. Start, Coin and
+  Service were on D1, D2, D5, D6 and D9; they are on Number1 and so on.
+  Chimera hands a key to the bindings under one name: the name its
+  DistinctKeyNameOverrides gives it ("Number1", "Enter", "Backtick",
+  "KeypadAdd") or else its DistinctKey name ("Up"); and unless told otherwise
+  it reads the left and right Shift, Ctrl and Alt as one key each, "Shift",
+  "Ctrl" and "Alt" (Input.cs, Config.MergeLAndRModifierKeys). A default
+  binding to another name never fired, so those controls shipped unbound on
+  the keyboard. Checked on Xvfb: with 1, Return, left Shift and Up held,
+  Chimera reports Number1, Enter, Shift and Up. Left and right names stay
+  beside the merged one, for a setup with the merging off.
 - **2026-10-12** The Vulkan renderer (chimera issue 248; patches/0021,
   `waterbox/vk-frontend.cpp`). The Renderer setting has a fourth value,
   `vulkan-hw`: Flycast's own Vulkan renderer on the Vulkan device Chimera hands
