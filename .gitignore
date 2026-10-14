@@ -47,3 +47,6 @@ minibox-diag.log
 # The gate writes its logs, dumps and configs here; all of it is regenerable by
 # running the gate, and none of it is a fixture.
 waterbox/tests/work/
+
+# what Python writes when a test script imports another
+__pycache__/
