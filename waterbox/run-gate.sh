@@ -727,9 +727,11 @@ else
 	else
 		dgot="$("$crun" "$cpkg" --project "$dcol/two.chimeraProject" --files "$dcol" \
 			--frames 1 --record "$dcol/rec.txt" >/dev/null 2>&1 \
-			&& head -1 "$dcol/rec.txt" | sed 's/^\(|[^|]*\).*/\1/')"
-		# the console group, which is everything before the first port: three
-		# controls, so three characters - the lid and the two selector keys
+			&& grep -m1 '^|' "$dcol/rec.txt" | sed 's/^\(|[^|]*\).*/\1/')"
+		# the console group of the first entry (the recorded movie starts with
+		# its [Input] and LogKey lines), which is everything before the first
+		# port: three controls, so three characters - the lid and the two
+		# selector keys
 		if [ "$dgot" = "|..." ]; then
 			report "disc:columns" PASS "a two-disc machine puts the lid and its selector in the movie"
 		else
@@ -1152,6 +1154,17 @@ if [ -d "$wd" ]; then
 	else
 		report "native:determinism" FAIL "the native reference wanders between runs"
 	fi
+fi
+
+# ---- the arcade panel's order ------------------------------------------------
+# What waterbox.config declares a player's arcade buttons as must be the order
+# the core reads them in (its ARC_ enum): the wire goes by place, and a Coin
+# declared in one place and read in another is pressed as something else
+# (chimera#337 moved Coin beside Start in both). Needs no content.
+if out="$(python3 "$here/tests/check-arcade-order.py" "$here/cinterface.cpp" "$here/waterbox.config" 2>&1)"; then
+	report "package:arcade-order" PASS "$out"
+else
+	report "package:arcade-order" FAIL "$(echo "$out" | head -2 | tr '\n' ' ' | cut -c1-200)"
 fi
 
 # ---- the arcade boards, against a real game OFF THE RECORD ------------------

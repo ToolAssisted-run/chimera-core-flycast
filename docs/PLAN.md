@@ -1700,3 +1700,22 @@ Chimera's firmware channel once the machine runs.
   to the native reference, savestates included. No patch was needed for the
   renderer after all - upstream's own `NO_REND` selects the renderer that draws
   nothing - so the patch set is one file: the log listener that opens a socket.
+
+## 2026-10-21: the arcade panel's Coin beside Start (chimera#337)
+
+The arcade boards' panel listed Coin after the eight buttons; it is now right
+after Start, in waterbox.config and in the core's ARC_ enum, which is the
+order the wire goes by. A project made before keeps its own column order.
+The gate's new `package:arcade-order` (`waterbox/tests/check-arcade-order.py`)
+holds the two lists to each other for every arcade machine and player; with
+the old enum it failed. The gate's `disc:columns` read the recorded movie's
+first line, which is now its `[Input]` header, and failed though the drive's
+controls were there; it reads the first entry now.
+
+Measured: the gate passes, 66 of 66 run, with the NAOMI (SFZ3) and NAOMI 2
+(Virtua Fighter 4) content from the owner's folder, 7 skipped (Dreamcast
+discs); the frontend tests pass but for `arcade:frontend`, which fails the
+same way on the commit before this one (System RAM after 600 idle frames
+differs from the native run's), so it is older than this change and is
+followed up on its own. A coin pressed during the attract changed the
+machine but showed nothing on screen by frame 4600.
