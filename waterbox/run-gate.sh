@@ -31,6 +31,27 @@ done
 	echo "guest build missing: sh waterbox/setup-guest.sh && ninja -C build/meson-guest core.wbx" >&2; exit 1; }
 
 work="$(mktemp -d)"
+# A game runs only in a project (Chimera, 2026-10-26): crun_game <package>
+# <game> <movie> [chimera-run's options] makes one of the game and the movie,
+# with any --settings and --firmware given, and runs it with the rest.
+crun_game() {
+	local pkg="$1" game="$2" movie="$3" made=() run=() dir
+	shift 3
+	while [ $# -gt 0 ]; do
+		case "$1" in
+			--settings) made+=("$1" "$2"); shift ;;
+			--settings=*) made+=(--settings "${1#--settings=}") ;;
+			--firmware) made+=("$1" "$2"); run+=("$1" "$2"); shift ;;
+			--firmware=*) made+=(--firmware "${1#--firmware=}"); run+=(--firmware "${1#--firmware=}") ;;
+			*) run+=("$1") ;;
+		esac
+		shift
+	done
+	dir="$(mktemp -d "$work/project.XXXXXX")"
+	"$crun" --new-project "$dir/game.chimeraProject" "$pkg" "$game" "$movie" "${made[@]}" > "$dir/make.log" 2>&1 \
+		|| { echo "chimera-run: no project made: $(tail -1 "$dir/make.log")" >&2; return 2; }
+	"$crun" --project "$dir/game.chimeraProject" "$pkg" --files "$(dirname "$game")" "${run[@]}"
+}
 trap 'rm -rf "$work"' EXIT
 digests() { grep -E '^(frames|vsync|videoHash|audioHash|audioFrames|lagFrames|domain\[)'; }
 # What a turbo run can be held to: everything except the whole-run video hash,
@@ -1295,7 +1316,7 @@ else
 	printf '[Input]\nLogKey:#\n' > "$work/none.txt"
 	wrong=""
 	check() { # <settings> <expected entry> <what it means>
-		got="$("$crun" "$cpkg" "$root/tests/roms/counter.elf" "$work/none.txt" \
+		got="$(crun_game "$cpkg" "$root/tests/roms/counter.elf" "$work/none.txt" \
 			--settings "$1" --frames 1 --record "$work/shape.txt" >/dev/null 2>&1 \
 			&& head -1 "$work/shape.txt")"
 		[ "$got" = "$2" ] || wrong="$wrong; $3 gave [${got:-nothing}] want [$2]"
@@ -1366,7 +1387,7 @@ else
 	mkdir -p "$gz"
 	printf '[Input]\nLogKey:#\n' > "$gz/none.txt"
 	# a movie of its own: --rewind-loop needs frames to rewind through
-	"$crun" "$cpkg" "$root/tests/roms/triangle.elf" "$gz/none.txt" \
+	crun_game "$cpkg" "$root/tests/roms/triangle.elf" "$gz/none.txt" \
 		--settings '{"renderer":"opengl-hw"}' --frames 40 --record "$gz/movie.txt" \
 		> "$gz/record.log" 2>&1
 	# The core's own log colours its lines and leaves the reset sequence at the
@@ -1385,11 +1406,11 @@ else
 	if [ ! -s "$gz/movie.txt" ]; then
 		report "gl:rebuild-at-zero" FAIL "could not record a movie to rewind through (see $gz/record.log)"
 	else
-		CHIMERA_GL_TRACE=1 CHIMERA_GL_STATEAUDIT=1 "$crun" "$cpkg" \
+		CHIMERA_GL_TRACE=1 CHIMERA_GL_STATEAUDIT=1 crun_game "$cpkg" \
 			"$root/tests/roms/triangle.elf" "$gz/movie.txt" \
 			--settings '{"renderer":"opengl-hw"}' --frames 40 --gpu \
 			> "$gz/plain.log" 2>&1
-		CHIMERA_GL_TRACE=1 CHIMERA_GL_STATEAUDIT=1 "$crun" "$cpkg" \
+		CHIMERA_GL_TRACE=1 CHIMERA_GL_STATEAUDIT=1 crun_game "$cpkg" \
 			"$root/tests/roms/triangle.elf" "$gz/movie.txt" \
 			--settings '{"renderer":"opengl-hw"}' --frames 40 --gpu \
 			--greenzone 4096 --rewind-loop 0,1 > "$gz/rewind0.log" 2>&1
@@ -1461,7 +1482,7 @@ else
 	cp "$suite" "$pal/240pSuite.cdi"
 	palrun() { # <rom> <movie> <log> <chimera-run arguments...>
 		palrom="$1"; palmovie="$2"; pallog="$3"; shift 3
-		CHIMERA_PICTURE_TRACE=1 "$crun" "$cpkg" "$palrom" "$palmovie" \
+		CHIMERA_PICTURE_TRACE=1 crun_game "$cpkg" "$palrom" "$palmovie" \
 			--settings '{"renderer":"opengl-hw"}' "$@" > "$pallog" 2>&1 || true
 	}
 	exact() { grep -c ": 0.00% of pixels differ, 0.00% by more than 8 (largest 0)" "$1"; }
@@ -1550,10 +1571,10 @@ else
 	cp "$suite" "$vk/240pSuite.cdi"
 	vkrun() { # <name> <renderer> <chimera-run arguments...>: the log in $vk/<name>.log
 		vkname="$1"; vkrenderer="$2"; shift 2
-		CHIMERA_PICTURE_TRACE=1 "$crun" "$cpkg" "$vk/240pSuite.cdi" "$vk/menu.txt" --gpu \
+		CHIMERA_PICTURE_TRACE=1 crun_game "$cpkg" "$vk/240pSuite.cdi" "$vk/menu.txt" --gpu \
 			--settings "{\"renderer\":\"$vkrenderer\"}" "$@" > "$vk/$vkname.log" 2>&1 || true
 	}
-	"$crun" "$cpkg" "$vk/240pSuite.cdi" "$vk/none.txt" --frames 320 --record "$vk/menu.txt" > "$vk/record.log" 2>&1 || true
+	crun_game "$cpkg" "$vk/240pSuite.cdi" "$vk/none.txt" --frames 320 --record "$vk/menu.txt" > "$vk/record.log" 2>&1 || true
 	vkrun straight vulkan-hw --frames 300 --screenshot "299=$vk/vk.tga" --dump "System RAM=$vk/vk.ram"
 	vk_card="$(grep -o 'chimera vk: .*(Vulkan [^)]*)' "$vk/straight.log" | head -1 | cut -c13-)"
 	if [ ! -s "$vk/menu.txt" ]; then
@@ -1595,9 +1616,9 @@ else
 		# frame of its life, saved on frames nobody read a picture from (what a
 		# seek leaves behind), told and - the control - left untold
 		vkrun probe vulkan-hw --frames 320 --greenzone 4096 --greenzone-period 1 --greenzone-max-stride 1 --settle-probe 300,6
-		"$crun" "$cpkg" "$root/tests/roms/triangle.elf" "$vk/none.txt" --frames 40 --record "$vk/once.txt" > "$vk/record-once.log" 2>&1 || true
+		crun_game "$cpkg" "$root/tests/roms/triangle.elf" "$vk/none.txt" --frames 40 --record "$vk/once.txt" > "$vk/record-once.log" 2>&1 || true
 		vkonce() { # <name>: the log in $vk/<name>.log
-			CHIMERA_PICTURE_TRACE=1 "$crun" "$cpkg" "$root/tests/roms/triangle.elf" "$vk/once.txt" --gpu --settings '{"renderer":"vulkan-hw"}' \
+			CHIMERA_PICTURE_TRACE=1 crun_game "$cpkg" "$root/tests/roms/triangle.elf" "$vk/once.txt" --gpu --settings '{"renderer":"vulkan-hw"}' \
 				--frames 40 --greenzone 4096 --greenzone-period 1 --greenzone-max-stride 1 \
 				--settle-probe 20,6 --settle-probe-unseen --draw-every-frame > "$vk/$1.log" 2>&1 || true
 		}
@@ -1625,7 +1646,7 @@ else
 			# the same blank row as the suite's movie, as many times as needed
 			yes "$(head -1 "$vk/menu.txt")" | head -n $((vkf + 1)) > "$vk/long.txt"
 			for r in opengl vulkan; do
-				CHIMERA_PICTURE_TRACE=1 "$crun" "$cpkg" "$FLYCAST_GFX_DISC" "$vk/long.txt" --gpu --settings "{\"renderer\":\"$r-hw\"}" \
+				CHIMERA_PICTURE_TRACE=1 crun_game "$cpkg" "$FLYCAST_GFX_DISC" "$vk/long.txt" --gpu --settings "{\"renderer\":\"$r-hw\"}" \
 					--frames $((vkf + 1)) --screenshot "$((vkf - 2))=$vk/time-$r-before.tga" --screenshot "$vkf=$vk/time-$r.tga" \
 					> "$vk/time-$r.log" 2>&1 || true
 			done
@@ -1649,7 +1670,7 @@ else
 		else
 			yes "$(head -1 "$vk/menu.txt")" | head -n $((vktf + 1)) > "$vk/long.txt"
 			for r in opengl vulkan; do
-				"$crun" "$cpkg" "$FLYCAST_VK_TEXTURE_DISC" "$vk/long.txt" --gpu --settings "{\"renderer\":\"$r-hw\"}" \
+				crun_game "$cpkg" "$FLYCAST_VK_TEXTURE_DISC" "$vk/long.txt" --gpu --settings "{\"renderer\":\"$r-hw\"}" \
 					--frames $((vktf + 1)) --screenshot "$vktf=$vk/texture-$r.tga" > "$vk/texture-$r.log" 2>&1 || true
 			done
 			small="$(python3 "$here/tests/check-same-picture.py" "$vk/texture-opengl.tga" "$vk/texture-vulkan.tga" 2>&1)"; small_rc=$?
