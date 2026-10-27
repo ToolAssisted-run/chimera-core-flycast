@@ -1,11 +1,11 @@
 #!/bin/bash
-# The frontend half of the gate: load the Flycast package in Chimera (under
-# Mono, on a private Xvfb display), boot a homebrew program for a fixed
+# The frontend half of the gate: load the Flycast package in Chimera's window
+# (run headless: no display is needed), boot a homebrew program for a fixed
 # number of frames with nothing pressed, and require the machine's System RAM
 # to be byte-identical to the native reference. Then prove a machine-shaping
 # setting arrives (region=japan still matches ITS native reference, and the
 # flash is another machine's), and that the package's keybinds become the
-# frontend's defaults.
+# machine's.
 #
 # Usage: ./run-frontend.sh [--chimera-root <path>] [--frames N]
 set -u
@@ -34,10 +34,10 @@ fi
 	echo "chimera checkout not found; pass --chimera-root <path>" >&2; exit 1; }
 chimera_root="$(cd "$chimera_root" && pwd)"
 
-emu_exe="$chimera_root/build/Chimera.exe"
+chimera_exe="$chimera_root/build/meson-linux/source/ui/chimera"
 package="$chimera_root/build/Cores/flycast.chimeraCore"
 rn="$root/build/meson-native/run-native"
-[ -f "$emu_exe" ] || { echo "Chimera not built: $emu_exe" >&2; exit 1; }
+[ -x "$chimera_exe" ] || { echo "Chimera not built: $chimera_exe" >&2; exit 1; }
 [ -f "$package" ] || { echo "package not installed: $package (run ../build-package.sh)" >&2; exit 1; }
 [ -x "$rn" ] || { echo "native reference not built" >&2; exit 1; }
 
@@ -52,29 +52,11 @@ mkdir -p "$work"
 # frontend's side: mount, boot, run, read memory.
 rom="$root/tests/roms/padread.elf"
 
-export LD_LIBRARY_PATH="$chimera_root/build/dll:$chimera_root/build:/usr/lib/x86_64-linux-gnu"
-export MONO_CRASH_NOFILE=1 MONO_WINFORMS_XIM_STYLE=disabled ALSOFT_DRIVERS=null
-xvfb_pid=""
-cleanup() { [ -n "$xvfb_pid" ] && kill "$xvfb_pid" 2>/dev/null; }
-trap cleanup EXIT
-if [ -z "${DISPLAY:-}" ]; then
-	command -v Xvfb >/dev/null || { echo "Xvfb not found (apt install xvfb)" >&2; exit 1; }
-	for n in 90 91 92 93 94 95 96; do
-		if [ ! -e "/tmp/.X11-unix/X$n" ]; then
-			Xvfb ":$n" -screen 0 640x480x24 -nolisten tcp & xvfb_pid=$!
-			export DISPLAY=":$n"; break
-		fi
-	done
-	sleep 1
-fi
-
-config="$work/config.ini"
-if [ ! -f "$config" ]; then
-	( cd "$chimera_root" && timeout 120 mono "$emu_exe" --headless "--config=$config" \
-		"--lua=$here/exit.lua" ) > "$work/bootstrap.log" 2>&1
-	[ -f "$config" ] || { echo "config bootstrap failed (see $work/bootstrap.log)" >&2; exit 1; }
-fi
-sed -i 's/"DispMethod": [0-9]/"DispMethod": 1/' "$config"
+# Chimera's window, run headless: the cores installed in the checkout, its
+# settings, cache and recovery files the run's own, and nothing carried over
+# from a Chimera installed on this machine
+export ALSOFT_DRIVERS=null CHIMERA_CORES_DIR="$chimera_root/build/Cores" CHIMERA_QT_CACHE="$work/qt-cache" CHIMERA_QT_RECOVERY="$work/qt-recovery" \
+	CHIMERA_QT_HASHES="$work/qt-file-hashes.txt" CHIMERA_QT_CHIMERA_SETTINGS="$work/no-chimera-config.ini"
 
 ok=0
 failed=0
@@ -101,7 +83,7 @@ run_frontend() {
 	[ -n "$shot" ] && rm -f "$shot"
 	local project
 	project="$(game_project "$tag" "$cfg" "$pkg" "$therom")" || { echo "no project made (see tests/work/project.$tag/make.log)" > "$work/$tag.log"; return 1; }
-	( cd "$chimera_root" && MINIHAWK_JOB="$job" timeout 900 mono "$emu_exe" --headless \
+	( cd "$chimera_root" && MINIHAWK_JOB="$job" timeout 900 "$chimera_exe" --headless \
 		"--config=$cfg" "--core=$pkg" $extra \
 		"--lua=$here/frontend-ram.lua" "--project=$project" ) > "$work/$tag.log" 2>&1
 	[ -f "$work/$tag.meta.txt" ] && grep -q "^status=OK" "$work/$tag.meta.txt"
@@ -124,7 +106,7 @@ native_ram() {
 # of its game with chimera-run --new-project, holding the settings
 # settings_config was given for the config it runs with.
 declare -A settings_of
-settings_config() { python3 "$here/settings-config.py" "$config" "$1" "$2"; settings_of["$1"]="$2"; }
+settings_config() { python3 "$here/settings-config.py" "$1" "$2"; settings_of["$1"]="$2"; }
 crun="$chimera_root/build/dll/chimera-run"
 game_project() { # tag, config, package, game: prints the project's path
 	local dir="$work/project.$1" settings="${settings_of[$2]:-}"
@@ -135,11 +117,27 @@ game_project() { # tag, config, package, game: prints the project's path
 		--settings "${settings:-"{}"}" "${fw[@]}" > "$dir/make.log" 2>&1 && echo "$dir/$1.chimeraProject"
 }
 
+# The bindings the machine has (the window keeps only the keys a person
+# changed; fresh settings have none, so these are the package's): <tag>
+# <project> <controller>, checked against the package's default_keybinds.json
+check_keys() {
+	local tag="$1" project="$2" controller="$3"
+	printf 'out=%s/%s.controls.json\nmeta=%s/%s.meta.txt\n' "$work" "$tag" "$work" "$tag" > "$work/job.$tag.txt"
+	rm -f "$work/$tag.controls.json" "$work/$tag.meta.txt"
+	( cd "$chimera_root" && MINIHAWK_JOB="$work/job.$tag.txt" timeout 900 "$chimera_exe" --headless \
+		"--config=$work/settings.$tag.json" "--project=$project" \
+		"--lua=$here/dump-controls.lua" ) > "$work/$tag.log" 2>&1
+	if [ ! -f "$work/$tag.meta.txt" ] || ! grep -q "^status=OK" "$work/$tag.meta.txt"; then
+		echo "run did not report OK (see tests/work/$tag.log)"; return 1
+	fi
+	python3 "$here/check-keybinds.py" "$work/$tag.controls.json" "$wb/default_keybinds.json" "$controller" 2>&1
+}
+
 # --- the machine the frontend builds must be the one the gate signed off on ---
-settings_config "$work/config.base.ini" '{}'
+settings_config "$work/settings.base.json" '{}'
 if ! native_ram "base" ""; then
 	report "disc:frontend" FAIL "native runner error (see tests/work/native.base.txt)"
-elif ! run_frontend "base" "$work/config.base.ini" "$frames" "$work/base.png"; then
+elif ! run_frontend "base" "$work/settings.base.json" "$frames" "$work/base.png"; then
 	report "disc:frontend" FAIL "no OK meta (see tests/work/base.log)"
 elif cmp -s "$work/native.base.ram.bin" "$work/base.ram.bin"; then
 	report "disc:frontend" PASS "$frames frames, System RAM identical to the native reference"
@@ -151,10 +149,10 @@ fi
 # The region is a Dreamcast's, and it lives in the machine's FLASH rather than
 # in RAM: a game reads it to decide what it is running on. So this leg compares
 # the flash the frontend's machine ended up with against the native one's.
-settings_config "$work/config.jp.ini" '{"region": "japan"}'
+settings_config "$work/settings.jp.json" '{"region": "japan"}'
 if ! native_ram "jp" '{"region":"japan"}'; then
 	report "settings:region" FAIL "native runner error (see tests/work/native.jp.txt)"
-elif ! run_frontend "jp" "$work/config.jp.ini" "$frames"; then
+elif ! run_frontend "jp" "$work/settings.jp.json" "$frames"; then
 	report "settings:region" FAIL "run did not report OK (see tests/work/jp.log)"
 elif ! cmp -s "$work/native.jp.ram.bin" "$work/jp.ram.bin"; then
 	report "settings:region" FAIL "System RAM differs from its native reference with region=japan"
@@ -183,10 +181,10 @@ if [ -n "${FLYCAST_ARCADE_ROMS:-}" ] && [ -f "$FLYCAST_ARCADE_ROMS/naomi.zip" ];
 	cp "$FLYCAST_ARCADE_ROMS/naomi.zip" "$FLYCAST_ARCADE_ROMS/$game" "$wd/"
 	printf '{"romset":["%s"]}' "$game" > "$wd/slots"
 	printf '{"machine":"naomi"}' > "$wd/settings"
-	settings_config "$work/config.arcade.ini" '{"machine": "naomi"}'
+	settings_config "$work/settings.arcade.json" '{"machine": "naomi"}'
 	if ! "$rn" "$wd" --frames "$aframes" --dump-domain "System RAM" "$work/native.arcade.ram.bin" > "$work/native.arcade.txt" 2>&1; then
 		report "arcade:frontend" FAIL "native runner error (see tests/work/native.arcade.txt)"
-	elif ! frames="$aframes" run_frontend "arcade" "$work/config.arcade.ini" "$aframes" "$work/arcade.png" "$package" \
+	elif ! frames="$aframes" run_frontend "arcade" "$work/settings.arcade.json" "$aframes" "$work/arcade.png" "$package" \
 			"$FLYCAST_ARCADE_ROMS/$game" "--firmware=naomi.zip=$FLYCAST_ARCADE_ROMS/naomi.zip" NAOMI; then
 		report "arcade:frontend" FAIL "no OK meta (see tests/work/arcade.log)"
 	elif cmp -s "$work/native.arcade.ram.bin" "$work/arcade.ram.bin"; then
@@ -195,28 +193,22 @@ if [ -n "${FLYCAST_ARCADE_ROMS:-}" ] && [ -f "$FLYCAST_ARCADE_ROMS/naomi.zip" ];
 		report "arcade:frontend" FAIL "System RAM differs from the native reference"
 	fi
 	# the panel's shipped bindings, adopted the way the Dreamcast's are below
-	if python3 "$here/check-keybinds.py" "$work/config.arcade.ini" \
-		"$wb/default_keybinds.json" "Arcade Panel" > "$work/arcadekeys.txt" 2>&1; then
-		report "arcade:keybinds" PASS "$(cat "$work/arcadekeys.txt")"
+	if out="$(check_keys "arcadekeys" "$work/project.arcade/arcade.chimeraProject" "Arcade Panel")"; then
+		report "arcade:keybinds" PASS "$out"
 	else
-		report "arcade:keybinds" FAIL "$(head -1 "$work/arcadekeys.txt")"
+		report "arcade:keybinds" FAIL "$out"
 	fi
 else
 	report "arcade:frontend" SKIP "set FLYCAST_ARCADE_ROMS to a folder with naomi.zip and a game: would prove a board opened by the frontend has the native reference's RAM"
-	report "arcade:keybinds" SKIP "same content: would prove the Arcade Panel's shipped bindings become the frontend's"
+	report "arcade:keybinds" SKIP "same content: would prove the Arcade Panel's shipped bindings are the machine's"
 fi
 
-# --- the bindings the package ships must become the frontend's defaults ---
-python3 "$here/forget-controller.py" "$work/config.base.ini" "$work/config.keys.ini" "Dreamcast Controller"
-if run_frontend "keys" "$work/config.keys.ini" 1; then
-	if python3 "$here/check-keybinds.py" "$work/config.keys.ini" \
-		"$wb/default_keybinds.json" "Dreamcast Controller" > "$work/keys.txt" 2>&1; then
-		report "keybinds" PASS "$(cat "$work/keys.txt")"
-	else
-		report "keybinds" FAIL "$(head -1 "$work/keys.txt")"
-	fi
+# --- the bindings the package ships are the machine's when nobody changed them
+# (the base run's project is the machine; its settings are the run's own)
+if out="$(check_keys "keys" "$work/project.base/base.chimeraProject" "Dreamcast Controller")"; then
+	report "keybinds" PASS "$out"
 else
-	report "keybinds" FAIL "run did not report OK (see tests/work/keys.log)"
+	report "keybinds" FAIL "$out"
 fi
 
 echo

@@ -42,7 +42,7 @@ jobs:
   core-gate:
     # The fast half: the sandboxed core must emulate byte-identically to the
     # same sources built for the host, and survive a savestate round-trip
-    # around every frame. No .NET, Mono or X involved.
+    # around every frame. No Chimera window or X display involved.
     name: core gate (native == sandbox == rerecord)
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -132,8 +132,8 @@ jobs:
           retention-days: 90
 
   frontend-gate:
-    # The other half: the package running inside the real frontend (Chimera
-    # headless under Mono + Xvfb, through the generic waterbox adapter). The
+    # The other half: the package running inside the real frontend (Chimera's
+    # window, run headless, through the generic waterbox adapter). The
     # emulated 68K RAM must match the native reference, a setting must arrive
     # through the frontend's config, and the package's default keybinds must
     # become the frontend's.
@@ -158,24 +158,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             meson ninja-build build-essential cmake pkg-config python3 bison flex \
-            mono-complete xvfb \
             libgl1-mesa-dev libx11-dev libxext-dev libasound2-dev python3-mako python3-packaging
 
-      - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+      - name: Cache Qt
+        uses: actions/cache@v4
         with:
-          dotnet-version: '8.0'
+          path: ~/qt
+          key: qt-6.12.0-linux-aqt-3.3.0
 
-      - name: Build Chimera native dependencies
-        working-directory: chimera-checkout
-        run: |
-          meson setup build/meson-linux --prefix "$PWD/build" --libdir dll
-          meson compile -C build/meson-linux
-          meson install -C build/meson-linux
-
-      - name: Build the Chimera solution
-        working-directory: chimera-checkout
-        run: dotnet build source/gui/Chimera.sln -c Release /nodeReuse:false -p:UseSharedCompilation=false
+      - name: Build Chimera (the engine, chimera-run and the window)
+        run: chimera-checkout/tools/ci-chimera.sh "$HOME/qt"
 
       - name: Check out what the core actually compiles
         # -C extern/flycast: libchdr is a submodule OF flycast, at
