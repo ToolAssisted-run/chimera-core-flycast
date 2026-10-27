@@ -520,7 +520,7 @@ Chimera's firmware channel once the machine runs.
   it reads the left and right Shift, Ctrl and Alt as one key each, "Shift",
   "Ctrl" and "Alt" (Input.cs, Config.MergeLAndRModifierKeys). A default
   binding to another name never fired, so those controls shipped unbound on
-  the keyboard. Checked on Xvfb: with 1, Return, left Shift and Up held,
+  the keyboard. Checked on a virtual X display: with 1, Return, left Shift and Up held,
   Chimera reports Number1, Enter, Shift and Up. Left and right names stay
   beside the merged one, for a setup with the merging off.
 - **2026-10-12** The Vulkan renderer (chimera issue 248; patches/0021,

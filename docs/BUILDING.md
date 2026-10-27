@@ -41,20 +41,17 @@ builds Chimera itself):
 sudo apt-get update
 sudo apt-get install -y --no-install-recommends \
   meson ninja-build build-essential cmake pkg-config python3 bison flex \
-  mono-complete xvfb \
   libgl1-mesa-dev libx11-dev libxext-dev libasound2-dev python3-mako python3-packaging
 ```
+
+Chimera's window needs Qt 6.12 as well. Chimera's `tools/ci-chimera.sh`
+installs it (from Qt's own archives, with aqt) and builds Chimera; the
+workflow keeps Qt in `~/qt` between runs.
 
 **Toolchains.**
 
 - C and C++: the gcc and g++ that `build-essential` installs. The workflow
   pins no compiler version.
-- .NET SDK 8.0, for the frontend gate only. CI uses `actions/setup-dotnet@v4`
-  with `dotnet-version: '8.0'`. Chimera's README gives the manual equivalent:
-  `curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0`.
-  It also says distro-built SDKs omit the WindowsDesktop targets the frontend
-  needs.
-- Mono and Xvfb (`mono-complete`, `xvfb`), for the frontend gate only.
 - No Rust.
 
 **What the scripts fetch or build themselves.**
@@ -272,15 +269,15 @@ is a file a person puts in Chimera's `Cores` folder.
 - **A Chimera source checkout.** The cores folder is `<chimera>/build/Cores/`,
   and `build-package.sh -r <chimera>` has already written the package there.
 - **A release bundle.** Copy `flycast.chimeraCore` into the `Cores` folder
-  beside `Chimera.exe`, or into the folder chosen with Change folder... in
-  File > Core Manager.
+  beside Chimera's program, or into the folder chosen with Change folder... in
+  Tools > Core Manager....
 - **Without building.** Download the package from this repository's Releases
   page, https://github.com/ToolAssisted-run/chimera-core-flycast/releases, and
   put it in the same folder. CI publishes a rolling `dev` release on every
   green push to `main` and a dated `nightly-YYYY-MM-DD` release from the
   scheduled run, when `main` moved since the last one.
 
-File > Core Manager lists what is in the folder; Refresh List rescans it.
+Tools > Core Manager... lists what is in the folder; Refresh List rescans it.
 
 A package's version is the commit it was built from. A hand-built package
 carries `+local` and is for testing; Chimera's publishing script refuses to
@@ -355,15 +352,11 @@ texture that stayed black. `docs/PLAN.md` (2026-10-12) has both.
 
 ### The frontend gate
 
-It runs the package inside Chimera itself, headless under Mono. Build Chimera
-first, as the workflow does:
+It runs the package inside Chimera's window, run headless: it needs no
+display. Build Chimera first, with its window, as the workflow does:
 
 ```sh
-cd "$chimera"
-meson setup build/meson-linux --prefix "$PWD/build" --libdir dll
-meson compile -C build/meson-linux
-meson install -C build/meson-linux
-dotnet build source/gui/Chimera.sln -c Release /nodeReuse:false -p:UseSharedCompilation=false
+"$chimera"/tools/ci-chimera.sh
 ```
 
 Then, from this repository, with the package installed and `run-native` built:
@@ -372,9 +365,8 @@ Then, from this repository, with the package installed and `run-native` built:
 ./waterbox/tests/run-frontend.sh --chimera-root "$chimera"
 ```
 
-Options: `--chimera-root <path>` and `--frames N` (default 300). When
-`DISPLAY` is not set it starts its own Xvfb. Logs and dumps go to
-`waterbox/tests/work/`.
+Options: `--chimera-root <path>` and `--frames N` (default 300). Logs
+and dumps go to `waterbox/tests/work/`.
 
 | Check | What it holds | Skipped without |
 | --- | --- | --- |
@@ -459,7 +451,5 @@ its picture is not deterministic.
 - **The frontend gate stops with `Chimera not built`, `package not installed`
   or `native reference not built`.** Build Chimera, run `build-package.sh`,
   or build `run-native`, respectively.
-- **`Xvfb not found (apt install xvfb)`.** The frontend gate starts its own X
-  display when `DISPLAY` is not set, and needs `xvfb` for it.
 - **`minibox-diag.log` appears.** The sandbox writes it when a guest faults.
   It is ignored by git.

@@ -81,8 +81,8 @@ ninja -C build/meson-guest
 `build-package.sh -r "$chimera"` writes
 `$chimera/build/Cores/flycast.chimeraCore`: the cores folder of a Chimera
 source checkout, so nothing else is needed there. For a release bundle, copy
-the file into the `Cores` folder beside `Chimera.exe` (or the folder set in
-File > Core Manager > Change folder...). File > Core Manager lists the folder;
+the file into the `cores` folder beside Chimera's program (or the folder set in
+Tools > Core Manager... > Change folder...). Tools > Core Manager... lists the folder;
 Refresh List rescans it. Chimera downloads nothing. The same file runs on
 Linux and on Windows.
 
@@ -103,8 +103,9 @@ Linux and on Windows.
   `$CHIMERA_ROOT` (or `chimera-checkout/`, `../chimera`, `$HOME/chimera`) has
   `build/meson-linux/chimera-run` and the installed package. CI skips them.
   Run them when you touch inputs, discs or the GL renderer.
-- The frontend gate needs Chimera built (natives and the .NET solution), the
-  package installed, `run-native`, Mono and Xvfb. See `docs/BUILDING.md`.
+- The frontend gate needs Chimera built with its window (Chimera's
+  `tools/ci-chimera.sh` builds it), the package installed and `run-native`.
+  The window runs headless and needs no display. See `docs/BUILDING.md`.
   Run it when you touch `waterbox.config`, `default_keybinds.json`,
   `file_slots.json` or anything the frontend passes to the core.
 - A leg that was skipped has proven nothing about your change.
