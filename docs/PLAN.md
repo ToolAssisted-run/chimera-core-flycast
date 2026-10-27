@@ -311,8 +311,8 @@ Chimera's firmware channel once the machine runs.
 - **The frontend's slot for a plain rom is the first REQUIRED one**, whatever
   the machine: a `.dat` opened without a project went into the Dreamcast's
   `disc` slot and the firmware conditions written over `romset` read false,
-  so naomi.zip was never asked for. `WaterboxCoreFactory.SlotsFromRom` now
-  picks among the slots the machine exposes (chimera side).
+  so naomi.zip was never asked for. Chimera now picks among the slots the
+  machine exposes.
 
 - **Two windows onto video memory, and only one of them is the PVR's.** The
   32-bit window (0xA5xxxxxx from the SH4) is what everything the PVR reads for
@@ -514,11 +514,10 @@ Chimera's firmware channel once the machine runs.
 
 - **2026-10-14** The default bindings name keys Chimera sends. Start, Coin and
   Service were on D1, D2, D5, D6 and D9; they are on Number1 and so on.
-  Chimera hands a key to the bindings under one name: the name its
-  DistinctKeyNameOverrides gives it ("Number1", "Enter", "Backtick",
-  "KeypadAdd") or else its DistinctKey name ("Up"); and unless told otherwise
+  Chimera hands a key to the bindings under one name: the name Chimera gives it ("Number1", "Enter", "Backtick",
+  "KeypadAdd") or else its own name ("Up"); and unless told otherwise
   it reads the left and right Shift, Ctrl and Alt as one key each, "Shift",
-  "Ctrl" and "Alt" (Input.cs, Config.MergeLAndRModifierKeys). A default
+  "Ctrl" and "Alt". A default
   binding to another name never fired, so those controls shipped unbound on
   the keyboard. Checked on a virtual X display: with 1, Return, left Shift and Up held,
   Chimera reports Number1, Enter, Shift and Up. Left and right names stay
