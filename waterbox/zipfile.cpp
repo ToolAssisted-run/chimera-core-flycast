@@ -125,17 +125,17 @@ bool Reader::open(ReadAt readAt, uint64_t fileSize, std::string *error)
 	m_readAt = std::move(readAt);
 	m_fileSize = fileSize;
 	m_entries.clear();
-	if (fileSize < 22) return fail(error, "too short to be a zip file");
+	if (fileSize < 22) return fail(error, "error.zip_short");
 
 	/* the end-of-central-directory record: scanned backwards for its
 	 * signature, because a comment of any length may follow it */
 	uint64_t tailLen = std::min<uint64_t>(fileSize, kEndSearch);
 	std::vector<uint8_t> tail((size_t)tailLen);
-	if (!m_readAt(fileSize - tailLen, tail.data(), (size_t)tailLen)) return fail(error, "could not read the end of the file");
+	if (!m_readAt(fileSize - tailLen, tail.data(), (size_t)tailLen)) return fail(error, "error.zip_no_end");
 	int64_t eocd = -1;
 	for (int64_t i = (int64_t)tailLen - 22; i >= 0; i--)
 		if (le32(&tail[(size_t)i]) == kEndOfDirectory) { eocd = i; break; }
-	if (eocd < 0) return fail(error, "no end-of-central-directory record: not a zip file");
+	if (eocd < 0) return fail(error, "error.zip_not_zip");
 	const uint8_t *e = &tail[(size_t)eocd];
 	uint64_t entryCount = le16(e + 10);
 	uint64_t dirSize = le32(e + 12);
@@ -152,21 +152,21 @@ bool Reader::open(ReadAt readAt, uint64_t fileSize, std::string *error)
 			uint64_t z64 = le64(loc + 8);
 			uint8_t rec[56];
 			if (z64 + sizeof(rec) > fileSize || !m_readAt(z64, rec, sizeof(rec)) || le32(rec) != kZip64EndOfDirectory)
-				return fail(error, "broken zip64 end-of-central-directory record");
+				return fail(error, "error.zip64_broken");
 			entryCount = le64(rec + 32);
 			dirSize = le64(rec + 40);
 			dirOffset = le64(rec + 48);
 		}
 	}
-	if (dirOffset + dirSize > fileSize) return fail(error, "the central directory lies outside the file");
+	if (dirOffset + dirSize > fileSize) return fail(error, "error.zip_directory_outside");
 
 	std::vector<uint8_t> dir((size_t)dirSize);
-	if (dirSize > 0 && !m_readAt(dirOffset, dir.data(), (size_t)dirSize)) return fail(error, "could not read the central directory");
+	if (dirSize > 0 && !m_readAt(dirOffset, dir.data(), (size_t)dirSize)) return fail(error, "error.zip_directory");
 
 	size_t p = 0;
 	for (uint64_t n = 0; n < entryCount; n++)
 	{
-		if (p + 46 > dir.size() || le32(&dir[p]) != kDirectoryEntry) return fail(error, "a central directory entry is not where the count says");
+		if (p + 46 > dir.size() || le32(&dir[p]) != kDirectoryEntry) return fail(error, "error.zip_entry_misplaced");
 		const uint8_t *h = &dir[p];
 		Entry entry;
 		const uint16_t flags = le16(h + 8);
@@ -178,7 +178,7 @@ bool Reader::open(ReadAt readAt, uint64_t fileSize, std::string *error)
 		const uint16_t extraLen = le16(h + 30);
 		const uint16_t commentLen = le16(h + 32);
 		entry.localHeader = le32(h + 42);
-		if (p + 46 + nameLen + extraLen + commentLen > dir.size()) return fail(error, "a central directory entry runs off the end");
+		if (p + 46 + nameLen + extraLen + commentLen > dir.size()) return fail(error, "error.zip_entry_off_end");
 		entry.name.assign((const char *)h + 46, nameLen);
 
 		/* the zip64 extended-information field carries whichever of the three
@@ -200,10 +200,10 @@ bool Reader::open(ReadAt readAt, uint64_t fileSize, std::string *error)
 			x = f + len;
 		}
 
-		if (flags & 1) return fail(error, "an encrypted member: not a rom set this reader takes");
+		if (flags & 1) return fail(error, "error.zip_encrypted");
 		if (entry.method != kStored && entry.method != kDeflate)
-			return fail(error, "a member compressed with something other than deflate: rezip it as an ordinary zip");
-		if (entry.localHeader >= fileSize) return fail(error, "a member's local header lies outside the file");
+			return fail(error, "error.zip_method");
+		if (entry.localHeader >= fileSize) return fail(error, "error.zip_header_outside");
 
 		m_entries.push_back(std::move(entry));
 		p += 46 + nameLen + extraLen + commentLen;
@@ -236,13 +236,13 @@ std::unique_ptr<Stream> Reader::open(const Entry &entry, std::string *error) con
 	uint8_t lh[30];
 	if (entry.localHeader + sizeof(lh) > m_fileSize || !m_readAt(entry.localHeader, lh, sizeof(lh)) || le32(lh) != kLocalHeader)
 	{
-		fail(error, "a member's local header is not where the directory says");
+		fail(error, "error.zip_header_misplaced");
 		return nullptr;
 	}
 	const uint64_t dataStart = entry.localHeader + 30 + le16(lh + 26) + le16(lh + 28);
 	if (dataStart + entry.compressedSize > m_fileSize)
 	{
-		fail(error, "a member's data runs off the end of the file");
+		fail(error, "error.zip_data_off_end");
 		return nullptr;
 	}
 	if (entry.method == kStored)

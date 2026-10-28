@@ -54,7 +54,7 @@ public:
 	{
 		m_file = file;
 		const s64 size = file->size();
-		if (size < 0) { g_lastError = "could not size the file"; return false; }
+		if (size < 0) { g_lastError = "error.zip_no_size"; return false; }
 		auto readAt = [file](uint64_t offset, void *buffer, size_t len) {
 			return file->seek((s64)offset, SEEK_SET) == 0 && file->read(buffer, 1, len) == len;
 		};
@@ -102,14 +102,14 @@ Archive *OpenArchive(const std::string &path)
 		const std::string ext = path.substr(dot + 1);
 		if (ext == "7z" || ext == "7Z")
 		{
-			g_lastError = "7z archives are not read here: rezip the set as an ordinary zip";
+			g_lastError = "error.zip_7z";
 			return nullptr;
 		}
 	}
 	hostfs::File *file = openAny(path);
 	if (file == nullptr)
 	{
-		g_lastError = "no such file";
+		g_lastError = "error.zip_no_file";
 		return nullptr;
 	}
 	std::unique_ptr<Zip> zip(new Zip());

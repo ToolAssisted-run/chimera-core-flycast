@@ -132,6 +132,11 @@ static void ChimeraCheckVulkanDevice()
 #define VIDEO_CAPACITY (DC_WIDTH * MAX_SCALE * DC_WIDTH * MAX_SCALE)
 #define MAX_SAMPLES 8192
 
+/* A text a person reads is a key of languages/en.json, each of its
+ * arguments after a TEXT_ARG (chimera docs/translations.md). TEXT_ARG is a
+ * string of its own so the byte after it is never read as more of its hex. */
+#define TEXT_ARG "\x1f"
+
 static char g_loadError[512];
 static uint32_t g_video[VIDEO_CAPACITY];
 /* the internalResolution setting, as a multiplier: 1 unless a GL renderer came
@@ -697,7 +702,7 @@ static bool PickArcadeRom(std::string &chosen)
 	}
 	if (files.empty())
 	{
-		snprintf(g_loadError, sizeof(g_loadError), "no rom set: the project's Rom set slot is empty");
+		snprintf(g_loadError, sizeof(g_loadError), "error.no_set");
 		return false;
 	}
 
@@ -728,9 +733,7 @@ static bool PickArcadeRom(std::string &chosen)
 	std::string list;
 	for (const std::string &f : files) list += (list.empty() ? "" : ", ") + f;
 	snprintf(g_loadError, sizeof(g_loadError),
-		"no rom set Flycast knows among: %s. A MAME set is recognised by its zip's name "
-		"(vf4.zip, ikaruga.zip), so a renamed zip is an unknown game; a decrypted dump "
-		"must end in .bin, .dat or .lst.", list.c_str());
+		"error.unknown_set" TEXT_ARG "%s", list.c_str());
 	return false;
 }
 
@@ -803,14 +806,10 @@ ECL_EXPORT int Init(void)
 			{
 				if (IsArcade())
 					snprintf(g_loadError, sizeof(g_loadError),
-						"this machine does not read save data called \"%s\". An arcade board's "
-						"memory is <rom set>.eeprom and <rom set>.nvmem, and its memory cards "
-						"vmu_B1.bin and vmu_C1.bin - the names Export Save Data writes.", entry);
+						"error.save_name_arcade" TEXT_ARG "%s", entry);
 				else
 					snprintf(g_loadError, sizeof(g_loadError),
-						"this machine does not read save data called \"%s\". Its cards are "
-						"vmu_A1.bin through vmu_D1.bin, one per connected controller - the "
-						"names Export Save Data writes.", entry);
+						"error.save_name" TEXT_ARG "%s", entry);
 				return 0;
 			}
 		}
@@ -832,8 +831,7 @@ ECL_EXPORT int Init(void)
 		if (board != MachinePlatform(g_machine))
 		{
 			snprintf(g_loadError, sizeof(g_loadError),
-				"%s is a %s game and this project's machine is the %s. The machine is the "
-				"project's: make a project for the %s, or pick a set for this one.",
+				"error.wrong_board" TEXT_ARG "%s" TEXT_ARG "%s" TEXT_ARG "%s" TEXT_ARG "%s",
 				file, BoardName(board), BoardName(MachinePlatform(g_machine)), BoardName(board));
 			return 0;
 		}
@@ -958,19 +956,18 @@ ECL_EXPORT int Init(void)
 				if (!chimera_vk_bridge_offered())
 				{
 					snprintf(g_loadError, sizeof(g_loadError),
-						"the renderer setting is vulkan-hw, and no Vulkan was handed over (this computer may have no Vulkan "
-						"driver, or this Chimera is older than its Vulkan bridge).");
+						"error.no_vulkan_bridge");
 					return 0;
 				}
 				g_vkUp = chimera_vk_start() != 0;
 				if (!g_vkUp)
 				{
-					snprintf(g_loadError, sizeof(g_loadError), "the Vulkan renderer would not start.");
+					snprintf(g_loadError, sizeof(g_loadError), "error.vulkan_not_started");
 					return 0;
 				}
 				config::RendererType = RenderType::Vulkan;
 #else
-				snprintf(g_loadError, sizeof(g_loadError), "the renderer setting is vulkan-hw, and this build has no Vulkan renderer.");
+				snprintf(g_loadError, sizeof(g_loadError), "error.no_vulkan_build");
 				return 0;
 #endif
 			}
@@ -1064,7 +1061,7 @@ ECL_EXPORT int Init(void)
 		 * software renderer needs no device, so it is simply started here. */
 		if (!rend_init_renderer())
 		{
-			snprintf(g_loadError, sizeof(g_loadError), "the software renderer would not start");
+			snprintf(g_loadError, sizeof(g_loadError), "error.software_not_started");
 			return 0;
 		}
 
@@ -1078,14 +1075,14 @@ ECL_EXPORT int Init(void)
 		 * stops at "Cannot open X" */
 		const char *why = IsArcade() ? chimera_archive_last_error() : "";
 		if (why != nullptr && why[0] != '\0')
-			snprintf(g_loadError, sizeof(g_loadError), "%s (%s)", e.what(), why);
+			snprintf(g_loadError, sizeof(g_loadError), "error.with_reason" TEXT_ARG "%s" TEXT_ARG "%s", e.what(), why);
 		else
 			snprintf(g_loadError, sizeof(g_loadError), "%s", e.what());
 		return 0;
 	}
 	catch (...)
 	{
-		snprintf(g_loadError, sizeof(g_loadError), "could not load '%s'", file);
+		snprintf(g_loadError, sizeof(g_loadError), "error.not_loaded" TEXT_ARG "%s", file);
 		return 0;
 	}
 
