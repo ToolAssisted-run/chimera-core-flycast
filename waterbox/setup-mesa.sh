@@ -71,6 +71,14 @@ if [ ! -d "$mesa/src/gallium" ]; then
 	mkdir -p "$mesa"
 	tar -xf "$tarball" -C "$mesa" --strip-components=1
 fi
+# x86-64: Mesa's hand-written GL dispatch (glapi_x86-64.S) reads the thread's
+# GL context at an offset from %fs, which an Intel Mac cannot run. Without the
+# assembly Mesa dispatches in C, which reads it as any other thread local.
+sed -i "/^elif host_machine.cpu_family() == 'x86_64'\$/{n;s/^  if system_has_kms_drm\$/  if false # Chimera: no x86-64 assembly/}" "$mesa/meson.build"
+grep -A1 "^elif host_machine.cpu_family() == 'x86_64'\$" "$mesa/meson.build" | grep -q "if false" || {
+	echo "mesa: its x86-64 assembly could not be turned off" >&2
+	exit 1
+}
 
 # meson and its deps in a private venv, so the host Python is left alone. Mesa's
 # version check needs `packaging` (3.12 dropped distutils); mako generates the
