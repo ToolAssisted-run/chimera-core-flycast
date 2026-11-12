@@ -38,7 +38,10 @@ jobs:
     # same sources built for the host, and survive a savestate round-trip
     # around every frame. No Chimera window or X display involved.
     name: core gate (native == sandbox == rerecord)
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04, not ubuntu-latest: on GitHub's 26.04 image GCC builds for
+    # x86-64-v3 (AVX2, FMA) by default, so a core built there would not run
+    # on an older processor and would round floating point differently
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
@@ -138,7 +141,10 @@ jobs:
     # through the frontend's config, and the package's default keybinds must
     # become the frontend's.
     name: frontend gate (Chimera)
-    runs-on: ubuntu-latest
+    # Ubuntu 24.04, not ubuntu-latest: on GitHub's 26.04 image GCC builds for
+    # x86-64-v3 (AVX2, FMA) by default, so a core built there would not run
+    # on an older processor and would round floating point differently
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v6
