@@ -36,6 +36,12 @@
 #include "cfg/option.h"
 #include "cfg/cfg.h"
 #include "hw/maple/maple_devs.h"
+
+/* this core's windows in Chimera's Emulator menu: miniBox's ready-made Export
+ * Save Data, built on its exports (Chimera has no tool of its own for a core,
+ * Chimera issue 610) */
+#define WBX_WINDOWS_IMPLEMENTATION
+#include <waterbox_windows.h>
 #if defined(CHIMERA_GUEST_GL)
 #include "hw/pvr/Renderer_if.h"
 /* At FILE scope on purpose: a declaration inside an ECL_EXPORT function body
